@@ -1,0 +1,87 @@
+[package]
+name = "nellie"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["Sequel Data <dev@sequeldata.com>"]
+description = "Production-grade semantic code memory system"
+license = "MIT"
+repository = "https://github.com/sequeldata/nellie-rs"
+keywords = ["semantic-search", "code-search", "mcp", "embeddings"]
+categories = ["development-tools", "database"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# MCP Protocol
+rmcp = { version = "0.1", features = ["server", "transport-sse-server"] }
+
+# HTTP Server
+axum = { version = "0.8", features = ["macros"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled", "blob"] }
+
+# Embeddings (ONNX Runtime)
+ort = { version = "2.0.0-rc.11", default-features = false, features = ["load-dynamic"] }
+ndarray = "0.16"
+tokenizers = "0.20"
+
+# File watching
+notify = { version = "6.0", default-features = false, features = ["macos_kqueue"] }
+notify-debouncer-mini = "0.4"
+ignore = "0.4"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# CLI
+clap = { version = "4.0", features = ["derive", "env"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging & Metrics
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+prometheus = "0.13"
+
+# Utilities
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+once_cell = "1.0"
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+blake3 = "1.5"
+
+[dev-dependencies]
+tempfile = "3.0"
+tokio-test = "0.4"
+criterion = "0.5"
+insta = "1.0"
+
+[[bench]]
+name = "search_benchmark"
+harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "deny"
+pedantic = "warn"
+nursery = "warn"

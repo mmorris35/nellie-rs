@@ -1,0 +1,22 @@
+[build]
+# Use mold linker for faster builds (if available)
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=native"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=native"]
+
+[alias]
+# Useful aliases
+t = "test"
+c = "check"
+b = "build"
+r = "run"
+br = "build --release"
+rr = "run --release"
+
+# Combined commands
+tc = "test -- --nocapture"
+lint = "clippy -- -D warnings"

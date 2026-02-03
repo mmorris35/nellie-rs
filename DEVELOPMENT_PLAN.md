@@ -292,6 +292,118 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 
 ---
 
+## Post-MVP Issues & Enhancements
+
+### Issue #9: Deploy nellie-rs to Mac Mini (mini-dev-server) - COMPLETED
+
+**Status**: ✅ COMPLETED (2026-02-03)
+**Type**: Enhancement / Documentation
+**Branch**: main (commit b52cc94)
+**GitHub**: https://github.com/mmorris35/nellie-rs/issues/9
+
+**Summary**: Created deployment infrastructure for macOS (Apple Silicon / ARM64) to run Nellie-RS alongside existing Python Nellie for parallel operation and migration.
+
+**Target Environment**:
+- Host: mini-dev-server (100.87.147.89 via Tailscale)
+- OS: macOS ARM64 (Apple Silicon)
+- Port: 8766 (parallel with Python Nellie on 8765)
+
+**Files Created**:
+- `packaging/macos/com.nellie-rs.server.plist` - launchd service configuration
+- `packaging/macos/install-macos.sh` - Automated installation script
+- `packaging/macos/migrate-from-python.sh` - Data migration script (lessons + checkpoints)
+- `packaging/nellie.conf` - Default Linux configuration file
+
+**Migration Plan**:
+1. Deploy nellie-rs on port 8766 (Python stays on 8765)
+2. Run migration script for lessons + checkpoints
+3. Let nellie-rs index watch directories
+4. Verify data parity
+5. Update clients to 8766
+6. Test for 1-2 days
+7. Shut down Python Nellie + ChromaDB
+8. Reconfigure nellie-rs to port 8765
+
+**Deployment Commands**:
+```bash
+# Build native ARM64 on Mac Mini
+cd /Volumes/mmn-github/github/nellie-rs
+cargo build --release
+
+# Install
+sudo ./packaging/macos/install-macos.sh
+
+# Start service
+sudo launchctl load /Library/LaunchDaemons/com.nellie-rs.server.plist
+
+# Verify
+curl http://localhost:8766/health
+
+# Migrate data
+./packaging/macos/migrate-from-python.sh
+```
+
+---
+
+### Issue #10: Enable EmbeddingService initialization in server startup - PENDING
+
+**Status**: ⏳ PENDING
+**Type**: Bug (HIGH priority)
+**GitHub**: https://github.com/mmorris35/nellie-rs/issues/10
+
+**Problem**: Server starts without initializing `EmbeddingService`, causing all semantic search operations to fail with:
+```
+"Embedding service not initialized. Semantic search requires real embeddings."
+```
+
+**Affected Tools**:
+- `search_code`
+- `search_lessons`
+- `search_checkpoints`
+
+**Root Cause**: In `src/server/app.rs`, `App::new()` creates `McpState` without embeddings:
+```rust
+pub fn new(config: ServerConfig, db: Database) -> Self {
+    let state = Arc::new(McpState::with_api_key(db, config.api_key.clone()));
+    // Never calls McpState::with_embeddings_and_api_key()
+    Self { config, state }
+}
+```
+
+**Required Changes**:
+
+1. **Update `ServerConfig`** in `src/server/app.rs`:
+   - Add `data_dir: PathBuf`
+   - Add `embedding_threads: usize`
+   - Add `enable_embeddings: bool`
+
+2. **Update `App::new()`** in `src/server/app.rs`:
+   - Initialize `EmbeddingService` if enabled
+   - Call `McpState::with_embeddings_and_api_key()`
+   - Make function async for model loading
+
+3. **Update `main.rs`**:
+   - Pass embedding config to `ServerConfig`
+   - Handle async `App::new()` initialization
+   - Add `--disable-embeddings` CLI flag
+
+4. **Provide model files**:
+   - Document model download in OPERATOR_GUIDE.md
+   - Expected location: `{data_dir}/models/all-MiniLM-L6-v2.onnx`
+
+**Files to Modify**:
+- `src/server/app.rs`
+- `src/main.rs`
+- `docs/OPERATOR_GUIDE.md`
+
+**Success Criteria**:
+- [ ] Server initializes EmbeddingService on startup
+- [ ] `search_code`, `search_lessons`, `search_checkpoints` work
+- [ ] Health endpoint reports embedding status
+- [ ] Tests pass with and without embeddings enabled
+
+---
+
 ## Phase Plan Files
 
 Each phase has a detailed plan file with Haiku-executable subtasks:

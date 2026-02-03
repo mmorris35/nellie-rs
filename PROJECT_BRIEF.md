@@ -250,4 +250,38 @@ POST /api/v1/search/code        Semantic code search (REST fallback)
 
 ---
 
+## Post-MVP Implementation Record
+
+This section documents changes made after initial MVP completion.
+
+### Issue #9: macOS Deployment (COMPLETED)
+
+**Date**: 2026-02-03
+**Type**: Enhancement
+**Status**: ✅ Implemented
+
+Added deployment infrastructure for Mac Mini (mini-dev-server):
+- launchd service configuration (`packaging/macos/com.nellie-rs.server.plist`)
+- Installation script (`packaging/macos/install-macos.sh`)
+- Migration script from Python Nellie (`packaging/macos/migrate-from-python.sh`)
+- Default configuration file (`packaging/nellie.conf`)
+
+Enables parallel operation on port 8766 alongside existing Python Nellie on 8765 for safe migration.
+
+### Issue #10: EmbeddingService Initialization (PENDING)
+
+**Date**: 2026-02-03 (identified)
+**Type**: Bug (HIGH)
+**Status**: ⏳ Pending implementation
+
+Server currently starts without initializing EmbeddingService, breaking all semantic search tools. Fix requires:
+- Update `ServerConfig` with embedding configuration
+- Initialize `EmbeddingService` in `App::new()`
+- Wire up configuration in `main.rs`
+- Document model file requirements
+
+See DEVELOPMENT_PLAN.md for detailed implementation plan.
+
+---
+
 *This brief is ready for DevPlan MCP to generate a DEVELOPMENT_PLAN.md*

@@ -8,6 +8,7 @@
 
 mod chunks;
 mod connection;
+mod file_state;
 mod models;
 mod schema;
 mod search;
@@ -19,6 +20,10 @@ pub use chunks::{
     update_chunk_embedding,
 };
 pub use connection::Database;
+pub use file_state::{
+    count_tracked_files, delete_file_state, find_stale_entries, get_file_state, list_file_paths,
+    needs_reindex, upsert_file_state,
+};
 pub use models::{CheckpointRecord, ChunkRecord, FileState, LessonRecord, SearchResult};
 pub use schema::{migrate, verify_schema, SCHEMA_VERSION};
 pub use search::{search_chunks, search_chunks_by_text, SearchOptions};

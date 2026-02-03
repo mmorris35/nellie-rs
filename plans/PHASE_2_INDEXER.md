@@ -1336,24 +1336,24 @@ cargo test watcher::chunker:: --verbose 2>&1 | tail -20
 ```
 
 **Success Criteria**:
-- [ ] Small files chunked as single chunk
-- [ ] Large files split appropriately
-- [ ] Overlap between chunks works
-- [ ] All chunker tests pass
-- [ ] Commit made with message "feat(watcher): implement code chunking strategy"
+- [x] Small files chunked as single chunk
+- [x] Large files split appropriately
+- [x] Overlap between chunks works
+- [x] All chunker tests pass
+- [x] Commit made with message "feat(watcher): implement code chunking strategy"
 
 ---
 
 **Completion Notes**:
-- **Implementation**: (describe what was done)
+- **Implementation**: Implemented intelligent code chunking with configurable chunk sizes (default 50 lines target, 10-100 line range). Uses break-point detection to split at function/class definitions, empty lines, and language markers for better semantic boundaries. Supports overlapping chunks for contextual continuity between boundaries.
 - **Files Created**:
-  - `src/watcher/chunker.rs` (X lines)
+  - `src/watcher/chunker.rs` (253 lines) - CodeChunk, ChunkerConfig, Chunker, break-point detection
 - **Files Modified**:
-  - `src/watcher/mod.rs` (X lines)
-- **Tests**: X tests passing
-- **Build**: ✅ cargo test passes
+  - `src/watcher/mod.rs` (3 lines) - Added chunker module and exports
+- **Tests**: 4 unit tests passing (test_chunk_small_file, test_chunk_large_file, test_chunk_empty_file, test_good_break_points)
+- **Build**: ✅ cargo test passes (106 tests total), cargo clippy clean, cargo fmt clean, cargo build --release succeeds
 - **Branch**: feature/2-2-indexing
-- **Notes**: (any additional context)
+- **Notes**: Made find_chunk_end and is_good_break_point static methods for better separation of concerns. Uses smart heuristics to find good break points in code (functions, classes, empty lines) rather than hard splits, improving semantic chunking quality.
 
 ---
 
@@ -1363,10 +1363,10 @@ cargo test watcher::chunker:: --verbose 2>&1 | tail -20
 - [x] 2.2.1: Implement Code Chunking Strategy
 
 **Deliverables**:
-- [ ] Create indexer service that combines watcher + chunker + embeddings
-- [ ] Process index requests asynchronously
-- [ ] Handle file updates (re-index) and deletes
-- [ ] Write integration tests
+- [x] Create indexer service that combines watcher + chunker + embeddings
+- [x] Process index requests asynchronously
+- [x] Handle file updates (re-index) and deletes
+- [x] Write integration tests
 
 **Files to Create**:
 
@@ -1709,24 +1709,24 @@ cargo test watcher::indexer:: --verbose 2>&1 | tail -30
 ```
 
 **Success Criteria**:
-- [ ] Files indexed correctly
-- [ ] Unchanged files skipped
-- [ ] Deleted files removed from index
-- [ ] All indexer tests pass
-- [ ] Commit made with message "feat(watcher): build incremental indexing pipeline"
+- [x] Files indexed correctly
+- [x] Unchanged files skipped
+- [x] Deleted files removed from index
+- [x] All indexer tests pass
+- [x] Commit made with message "feat(watcher): build incremental indexing pipeline"
 
 ---
 
 **Completion Notes**:
-- **Implementation**: (describe what was done)
+- **Implementation**: Created Indexer service that combines file watcher events, code chunking, and embedding generation. Processes IndexRequest and PathBuf messages from event handler, performs content-based hashing to detect changes, chunks files intelligently, generates embeddings (or empty vectors if no service), and stores chunks in SQLite. Implements file deletion with proper cleanup of chunks and file state records.
 - **Files Created**:
-  - `src/watcher/indexer.rs` (X lines)
+  - `src/watcher/indexer.rs` (335 lines) - Indexer service, async index_file/delete_file, hash computation, embedding generation, async run loop with tokio::select
 - **Files Modified**:
-  - `src/watcher/mod.rs` (X lines)
-- **Tests**: X tests passing
-- **Build**: ✅ cargo test passes
+  - `src/watcher/mod.rs` (2 lines) - Added indexer module and Indexer export
+- **Tests**: 4 tests passing (test_index_file, test_reindex_unchanged, test_delete_file, test_compute_hash)
+- **Build**: ✅ cargo test passes (110 total), cargo clippy clean, cargo fmt clean, cargo build --release succeeds
 - **Branch**: feature/2-2-indexing
-- **Notes**: (any additional context)
+- **Notes**: Uses blake3 for content hashing to enable incremental indexing. Returns empty embeddings when no EmbeddingService available to avoid needing sqlite-vec in tests. Properly handles both file updates and deletions with appropriate database cleanup.
 
 ---
 

@@ -98,13 +98,13 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [x] 1.3.2: Implement embedding worker with thread pool
 - [x] 1.3.3: Create async embedding API with channels
 
-### Phase 2: File Watcher & Indexing (1 week)
+### Phase 2: File Watcher & Indexing (1 week) - COMPLETE
 - [x] 2.1.1: Set up notify-rs file watcher
 - [x] 2.1.2: Implement gitignore-aware filtering
 - [x] 2.1.3: Create file change event handler
-- [ ] 2.2.1: Implement code chunking strategy
-- [ ] 2.2.2: Build incremental indexing pipeline
-- [ ] 2.2.3: Add file state tracking for change detection
+- [x] 2.2.1: Implement code chunking strategy
+- [x] 2.2.2: Build incremental indexing pipeline
+- [x] 2.2.3: Add file state tracking for change detection
 
 ### Phase 3: Lessons & Checkpoints (1 week)
 - [ ] 3.1.1: Implement lessons storage and CRUD
@@ -131,8 +131,8 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [ ] 5.2.2: Generate API documentation
 - [ ] 5.2.3: Create operator guide
 
-**Current Phase**: 2 (File Watcher & Indexing)
-**Next Subtask**: 2.1.3
+**Current Phase**: 3 (Lessons & Checkpoints)
+**Next Subtask**: 3.1.1
 
 ---
 

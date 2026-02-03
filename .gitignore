@@ -36,3 +36,6 @@ Thumbs.db
 /coverage/
 *.profraw
 *.profdata
+
+# Build artifacts (release builds)
+/dist/

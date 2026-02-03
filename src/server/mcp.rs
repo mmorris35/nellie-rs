@@ -97,6 +97,29 @@ pub fn get_tools() -> Vec<ToolInfo> {
             }),
         },
         ToolInfo {
+            name: "list_lessons".to_string(),
+            description: Some(
+                "List all recorded lessons learned with optional filters for severity and limit"
+                    .to_string(),
+            ),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "severity": {
+                        "type": "string",
+                        "enum": ["critical", "warning", "info"],
+                        "description": "Filter by severity level (optional)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum lessons to return (default: 50)",
+                        "default": 50
+                    }
+                },
+                "required": []
+            }),
+        },
+        ToolInfo {
             name: "add_lesson".to_string(),
             description: Some("Record a lesson learned during development".to_string()),
             input_schema: serde_json::json!({
@@ -122,6 +145,20 @@ pub fn get_tools() -> Vec<ToolInfo> {
                     }
                 },
                 "required": ["title", "content", "tags"]
+            }),
+        },
+        ToolInfo {
+            name: "delete_lesson".to_string(),
+            description: Some("Delete a lesson by ID".to_string()),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Lesson ID to delete"
+                    }
+                },
+                "required": ["id"]
             }),
         },
         ToolInfo {
@@ -163,6 +200,20 @@ pub fn get_tools() -> Vec<ToolInfo> {
                     }
                 },
                 "required": ["agent"]
+            }),
+        },
+        ToolInfo {
+            name: "trigger_reindex".to_string(),
+            description: Some("Trigger manual re-indexing of specified paths".to_string()),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File or directory path to re-index (optional, re-indexes all if omitted)"
+                    }
+                },
+                "required": []
             }),
         },
         ToolInfo {
@@ -221,9 +272,12 @@ async fn invoke_tool(
     let result = match request.name.as_str() {
         "search_code" => handle_search_code(&state, &request.arguments),
         "search_lessons" => handle_search_lessons(&state, &request.arguments),
+        "list_lessons" => handle_list_lessons(&state, &request.arguments),
         "add_lesson" => handle_add_lesson(&state, &request.arguments),
+        "delete_lesson" => handle_delete_lesson(&state, &request.arguments),
         "add_checkpoint" => handle_add_checkpoint(&state, &request.arguments),
         "get_recent_checkpoints" => handle_get_checkpoints(&state, &request.arguments),
+        "trigger_reindex" => handle_trigger_reindex(&state, &request.arguments),
         "get_status" => handle_get_status(&state),
         _ => Err(format!("Unknown tool: {}", request.name)),
     };
@@ -332,6 +386,36 @@ fn handle_search_lessons(
     Ok(serde_json::to_value(&lessons).unwrap_or_default())
 }
 
+#[allow(clippy::redundant_closure, clippy::cast_possible_truncation)]
+fn handle_list_lessons(
+    state: &McpState,
+    args: &serde_json::Value,
+) -> std::result::Result<serde_json::Value, String> {
+    let severity = args["severity"].as_str();
+    let limit = args["limit"].as_u64().unwrap_or(50) as usize;
+
+    let lessons = if let Some(severity_filter) = severity {
+        state
+            .db
+            .with_conn(|conn| crate::storage::list_lessons_by_severity(conn, severity_filter))
+            .map_err(|e| e.to_string())?
+    } else {
+        state
+            .db
+            .with_conn(|conn| crate::storage::list_lessons(conn))
+            .map_err(|e| e.to_string())?
+    };
+
+    // Apply limit
+    let limited_lessons: Vec<_> = lessons.into_iter().take(limit).collect();
+
+    Ok(serde_json::json!({
+        "lessons": serde_json::to_value(&limited_lessons).unwrap_or(serde_json::Value::Array(vec![])),
+        "count": limited_lessons.len(),
+        "severity": severity.unwrap_or("all")
+    }))
+}
+
 #[allow(clippy::redundant_closure)]
 fn handle_add_lesson(
     state: &McpState,
@@ -357,6 +441,24 @@ fn handle_add_lesson(
     Ok(serde_json::json!({
         "id": id,
         "message": "Lesson recorded successfully"
+    }))
+}
+
+#[allow(clippy::redundant_closure)]
+fn handle_delete_lesson(
+    state: &McpState,
+    args: &serde_json::Value,
+) -> std::result::Result<serde_json::Value, String> {
+    let id = args["id"].as_str().ok_or("id is required")?;
+
+    state
+        .db
+        .with_conn(|conn| crate::storage::delete_lesson(conn, id))
+        .map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "id": id,
+        "message": "Lesson deleted successfully"
     }))
 }
 
@@ -401,6 +503,55 @@ fn handle_get_checkpoints(
     Ok(serde_json::to_value(&checkpoints).unwrap_or_default())
 }
 
+#[allow(clippy::redundant_closure)]
+fn handle_trigger_reindex(
+    state: &McpState,
+    args: &serde_json::Value,
+) -> std::result::Result<serde_json::Value, String> {
+    let path = args["path"].as_str();
+
+    if let Some(target_path) = path {
+        // Delete chunks for the specific path to trigger re-indexing
+        state
+            .db
+            .with_conn(|conn| crate::storage::delete_chunks_by_file(conn, target_path))
+            .map_err(|e| e.to_string())?;
+
+        // Delete file state to mark as needing re-index
+        state
+            .db
+            .with_conn(|conn| crate::storage::delete_file_state(conn, target_path))
+            .map_err(|e| e.to_string())?;
+
+        Ok(serde_json::json!({
+            "status": "reindex_scheduled",
+            "path": target_path,
+            "message": format!("Re-indexing scheduled for path: {}", target_path)
+        }))
+    } else {
+        // Clear all file state to trigger full re-index
+        // This is done by deleting all entries from file_state table
+        state
+            .db
+            .with_conn(|conn| {
+                // Get all file paths first
+                let paths = crate::storage::list_file_paths(conn)?;
+                // Delete file state for all paths
+                for file_path in paths {
+                    crate::storage::delete_file_state(conn, &file_path)?;
+                }
+                Ok::<_, crate::Error>(())
+            })
+            .map_err(|e| e.to_string())?;
+
+        Ok(serde_json::json!({
+            "status": "reindex_scheduled",
+            "path": "all",
+            "message": "Full re-indexing scheduled for all tracked files"
+        }))
+    }
+}
+
 #[allow(clippy::redundant_closure, clippy::unnecessary_wraps)]
 fn handle_get_status(state: &McpState) -> std::result::Result<serde_json::Value, String> {
     let chunk_count = state
@@ -436,13 +587,17 @@ mod tests {
     #[test]
     fn test_tools_defined() {
         let tools = get_tools();
-        assert!(tools.len() >= 5);
+        assert!(tools.len() >= 9);
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"search_code"));
         assert!(names.contains(&"search_lessons"));
+        assert!(names.contains(&"list_lessons"));
         assert!(names.contains(&"add_lesson"));
+        assert!(names.contains(&"delete_lesson"));
         assert!(names.contains(&"add_checkpoint"));
+        assert!(names.contains(&"get_recent_checkpoints"));
+        assert!(names.contains(&"trigger_reindex"));
         assert!(names.contains(&"get_status"));
     }
 
@@ -986,6 +1141,273 @@ mod tests {
         let result = handle_get_checkpoints(&state, &args);
         // Should return success with empty results
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_lessons_success() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| -> crate::Result<()> {
+            crate::storage::migrate(conn)?;
+
+            // Insert test lessons
+            for i in 0..5 {
+                let lesson = crate::storage::LessonRecord::new(
+                    &format!("Lesson {}", i),
+                    &format!("Content for lesson {}", i),
+                    vec!["test".to_string()],
+                );
+                crate::storage::insert_lesson(conn, &lesson)?;
+            }
+            Ok(())
+        })
+        .expect("Failed to setup");
+        let state = McpState::new(db);
+
+        let args = serde_json::json!({});
+
+        let result = handle_list_lessons(&state, &args);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert!(response.get("lessons").is_some());
+        assert!(response.get("count").is_some());
+        assert_eq!(response["count"], 5);
+    }
+
+    #[test]
+    fn test_list_lessons_with_limit() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| -> crate::Result<()> {
+            crate::storage::migrate(conn)?;
+
+            // Insert test lessons
+            for i in 0..10 {
+                let lesson = crate::storage::LessonRecord::new(
+                    &format!("Lesson {}", i),
+                    &format!("Content {}", i),
+                    vec!["test".to_string()],
+                );
+                crate::storage::insert_lesson(conn, &lesson)?;
+            }
+            Ok(())
+        })
+        .expect("Failed to setup");
+        let state = McpState::new(db);
+
+        let args = serde_json::json!({
+            "limit": 3
+        });
+
+        let result = handle_list_lessons(&state, &args);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response["count"], 3);
+    }
+
+    #[test]
+    fn test_list_lessons_with_severity_filter() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| -> crate::Result<()> {
+            crate::storage::migrate(conn)?;
+
+            // Insert lessons with different severities
+            let lesson1 = crate::storage::LessonRecord::new(
+                "Critical Issue",
+                "A critical problem",
+                vec!["critical".to_string()],
+            )
+            .with_severity("critical");
+            crate::storage::insert_lesson(conn, &lesson1)?;
+
+            let lesson2 = crate::storage::LessonRecord::new(
+                "Warning Issue",
+                "A warning problem",
+                vec!["warning".to_string()],
+            )
+            .with_severity("warning");
+            crate::storage::insert_lesson(conn, &lesson2)?;
+
+            Ok(())
+        })
+        .expect("Failed to setup");
+        let state = McpState::new(db);
+
+        let args = serde_json::json!({
+            "severity": "critical"
+        });
+
+        let result = handle_list_lessons(&state, &args);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response["severity"], "critical");
+    }
+
+    #[test]
+    fn test_list_lessons_empty() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| crate::storage::migrate(conn))
+            .expect("Failed to migrate");
+        let state = McpState::new(db);
+
+        let args = serde_json::json!({});
+
+        let result = handle_list_lessons(&state, &args);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response["count"], 0);
+    }
+
+    #[test]
+    fn test_delete_lesson_success() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| -> crate::Result<()> {
+            crate::storage::migrate(conn)?;
+
+            // Insert a test lesson
+            let lesson = crate::storage::LessonRecord::new(
+                "Test Lesson",
+                "Test content",
+                vec!["test".to_string()],
+            );
+            crate::storage::insert_lesson(conn, &lesson)?;
+
+            Ok(())
+        })
+        .expect("Failed to setup");
+        let state = McpState::new(db);
+
+        // Get the ID from a list query first
+        let list_result = state
+            .db
+            .with_conn(|conn| crate::storage::list_lessons(conn))
+            .expect("Failed to list lessons");
+
+        if let Some(lesson) = list_result.first() {
+            let args = serde_json::json!({
+                "id": &lesson.id
+            });
+
+            let result = handle_delete_lesson(&state, &args);
+            assert!(result.is_ok());
+
+            let response = result.unwrap();
+            assert!(response.get("id").is_some());
+            assert!(response["message"].as_str().unwrap().contains("deleted"));
+        }
+    }
+
+    #[test]
+    fn test_delete_lesson_missing_id() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| crate::storage::migrate(conn))
+            .expect("Failed to migrate");
+        let state = McpState::new(db);
+
+        let args = serde_json::json!({});
+
+        let result = handle_delete_lesson(&state, &args);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("id is required"));
+    }
+
+    #[test]
+    fn test_trigger_reindex_specific_path() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| crate::storage::migrate(conn))
+            .expect("Failed to migrate");
+        let state = McpState::new(db);
+
+        let args = serde_json::json!({
+            "path": "/test/file.rs"
+        });
+
+        let result = handle_trigger_reindex(&state, &args);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response["status"], "reindex_scheduled");
+        assert_eq!(response["path"], "/test/file.rs");
+        assert!(response["message"]
+            .as_str()
+            .unwrap()
+            .contains("Re-indexing scheduled"));
+    }
+
+    #[test]
+    fn test_trigger_reindex_all_paths() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| crate::storage::migrate(conn))
+            .expect("Failed to migrate");
+        let state = McpState::new(db);
+
+        let args = serde_json::json!({});
+
+        let result = handle_trigger_reindex(&state, &args);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response["status"], "reindex_scheduled");
+        assert_eq!(response["path"], "all");
+        assert!(response["message"]
+            .as_str()
+            .unwrap()
+            .contains("Full re-indexing"));
+    }
+
+    #[test]
+    fn test_list_lessons_tool_exists() {
+        let tools = get_tools();
+        let list_lessons = tools
+            .iter()
+            .find(|t| t.name == "list_lessons")
+            .expect("list_lessons tool should exist");
+
+        assert!(list_lessons.description.is_some());
+        let desc = list_lessons.description.as_ref().unwrap().to_lowercase();
+        assert!(desc.contains("list"));
+    }
+
+    #[test]
+    fn test_delete_lesson_tool_exists() {
+        let tools = get_tools();
+        let delete_lesson = tools
+            .iter()
+            .find(|t| t.name == "delete_lesson")
+            .expect("delete_lesson tool should exist");
+
+        assert!(delete_lesson.description.is_some());
+        assert!(delete_lesson
+            .description
+            .as_ref()
+            .unwrap()
+            .contains("Delete"));
+    }
+
+    #[test]
+    fn test_trigger_reindex_tool_exists() {
+        let tools = get_tools();
+        let trigger_reindex = tools
+            .iter()
+            .find(|t| t.name == "trigger_reindex")
+            .expect("trigger_reindex tool should exist");
+
+        assert!(trigger_reindex.description.is_some());
+        assert!(trigger_reindex
+            .description
+            .as_ref()
+            .unwrap()
+            .contains("re-indexing"));
     }
 
     #[test]

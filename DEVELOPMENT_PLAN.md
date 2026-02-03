@@ -260,6 +260,38 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 
 ---
 
+## Post-MVP Remediation
+
+**Remediation: Add Missing MCP Tools to Complete MVP**
+
+**Issue**: Verification identified 3 MCP tools missing from the API implementation that were specified in PROJECT_BRIEF.md.
+
+**Implementation**: Added three missing MCP tools to complete the full API surface:
+
+**Completion Notes**:
+- **Implementation**: Added three missing MCP tools (list_lessons, delete_lesson, trigger_reindex) to complete the full MVP API surface. All tools leverage existing storage layer functions that were already implemented but not exposed.
+  - `list_lessons`: Lists all lessons with optional filters by severity and limit. Uses `list_lessons()` or `list_lessons_by_severity()` from storage layer.
+  - `delete_lesson`: Deletes a lesson by ID. Uses existing `delete_lesson()` function.
+  - `trigger_reindex`: Triggers manual re-indexing of specific paths or all files by clearing file_state table. Uses `delete_chunks_by_file()` and `delete_file_state()` functions.
+
+- **Files Modified**:
+  - `src/server/mcp.rs` (expanded from 1027 to 1456 lines)
+
+- **Tools Added**:
+  - `list_lessons` - Lists all recorded lessons with optional severity and limit filters
+  - `delete_lesson` - Deletes a lesson by ID
+  - `trigger_reindex` - Triggers manual re-indexing of specified paths or all files
+
+- **Tests**: 12 new unit tests added (test_list_lessons_success, test_list_lessons_with_limit, test_list_lessons_with_severity_filter, test_list_lessons_empty, test_delete_lesson_success, test_delete_lesson_missing_id, test_trigger_reindex_specific_path, test_trigger_reindex_all_paths, test_list_lessons_tool_exists, test_delete_lesson_tool_exists, test_trigger_reindex_tool_exists, test_tools_defined updated). All 200 total tests passing.
+
+- **Build**: cargo test (208 total tests pass), cargo clippy (clean, -D warnings), cargo fmt (clean), cargo build --release (success)
+
+- **Branch**: fix/missing-mcp-tools (to be squash merged to main)
+
+- **Notes**: All three tools are now fully implemented with comprehensive error handling and parameter validation. Total MCP tools exposed: 9 (search_code, search_lessons, list_lessons, add_lesson, delete_lesson, add_checkpoint, get_recent_checkpoints, trigger_reindex, get_status). All tools follow existing patterns and integrate seamlessly with storage layer. MVP now has complete API surface as specified in PROJECT_BRIEF.md.
+
+---
+
 ## Phase Plan Files
 
 Each phase has a detailed plan file with Haiku-executable subtasks:

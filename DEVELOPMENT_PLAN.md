@@ -115,10 +115,10 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [x] 3.2.3: Create checkpoint search functionality
 
 ### Phase 4: MCP & REST API (1 week)
-- [ ] 4.1.1: Set up rmcp server with axum transport
-- [ ] 4.1.2: Implement search_code MCP tool
-- [ ] 4.1.3: Implement lessons MCP tools
-- [ ] 4.1.4: Implement checkpoint MCP tools
+- [x] 4.1.1: Set up rmcp server with axum transport
+- [x] 4.1.2: Implement search_code MCP tool
+- [x] 4.1.3: Implement lessons MCP tools
+- [x] 4.1.4: Implement checkpoint MCP tools
 - [ ] 4.2.1: Create REST health and metrics endpoints
 - [ ] 4.2.2: Add Prometheus metrics collection
 - [ ] 4.2.3: Implement graceful shutdown
@@ -132,7 +132,18 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [ ] 5.2.3: Create operator guide
 
 **Current Phase**: 4 (MCP & REST API)
-**Next Subtask**: 4.1.1
+**Next Subtask**: 4.2.1
+
+**Completion Notes (4.1.4)**:
+- **Implementation**: Implemented comprehensive test coverage for checkpoint MCP tools (add_checkpoint and get_recent_checkpoints). Both handlers were already present from 4.1.1 setup but lacked test coverage. Added 8 new unit tests covering all parameter validation, error handling, and success cases.
+- **Files Modified**:
+  - `src/server/mcp.rs` (added 8 new unit tests for checkpoint tools, 2 schema validation tests)
+- **Tests**: 29 unit tests passing (8 new checkpoint tests: test_add_checkpoint_success, test_add_checkpoint_missing_agent, test_add_checkpoint_missing_working_on, test_add_checkpoint_with_empty_state, test_get_checkpoints_success, test_get_checkpoints_missing_agent, test_get_checkpoints_default_limit, test_get_checkpoints_with_limit, test_get_checkpoints_empty_result, plus 2 schema tests)
+- **Build**: cargo test (176 tests pass), cargo clippy (clean), cargo fmt (clean), cargo build --release (success)
+- **Branch**: feature/4-1-mcp-server
+- **Notes**: Checkpoint tools are fully tested with comprehensive parameter validation. add_checkpoint requires agent, working_on, and state parameters. get_recent_checkpoints requires agent parameter and defaults limit to 5. Both tools properly integrate with storage layer functions.
+
+**Task 4.1 Complete**: All checkpoint MCP tools (add_checkpoint, get_recent_checkpoints) are fully implemented and tested. Ready for squash merge to main.
 
 ---
 

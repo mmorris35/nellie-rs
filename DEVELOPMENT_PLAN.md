@@ -108,8 +108,8 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 
 ### Phase 3: Lessons & Checkpoints (1 week)
 - [x] 3.1.1: Implement lessons storage and CRUD
-- [ ] 3.1.2: Add lesson search with semantic matching
-- [ ] 3.1.3: Implement tag-based filtering
+- [x] 3.1.2: Add lesson search with semantic matching
+- [x] 3.1.3: Implement tag-based filtering
 - [ ] 3.2.1: Implement checkpoint storage
 - [ ] 3.2.2: Add agent status tracking
 - [ ] 3.2.3: Create checkpoint search functionality
@@ -132,7 +132,7 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [ ] 5.2.3: Create operator guide
 
 **Current Phase**: 3 (Lessons & Checkpoints)
-**Next Subtask**: 3.1.1
+**Next Subtask**: 3.2.1
 
 ---
 

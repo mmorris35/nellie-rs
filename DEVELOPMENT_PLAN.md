@@ -135,15 +135,18 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 **Next Subtask**: 4.2.1
 
 **Completion Notes (4.1.4)**:
-- **Implementation**: Implemented comprehensive test coverage for checkpoint MCP tools (add_checkpoint and get_recent_checkpoints). Both handlers were already present from 4.1.1 setup but lacked test coverage. Added 8 new unit tests covering all parameter validation, error handling, and success cases.
+- **Implementation**: Implemented comprehensive test coverage for checkpoint MCP tools (add_checkpoint and get_recent_checkpoints). Both handlers were already present from 4.1.1 setup but lacked test coverage. Added 10 new unit tests covering all parameter validation, error handling, and success cases.
+- **Files Created**:
+  - `src/server/mcp.rs` (1011 lines)
 - **Files Modified**:
-  - `src/server/mcp.rs` (added 8 new unit tests for checkpoint tools, 2 schema validation tests)
-- **Tests**: 29 unit tests passing (8 new checkpoint tests: test_add_checkpoint_success, test_add_checkpoint_missing_agent, test_add_checkpoint_missing_working_on, test_add_checkpoint_with_empty_state, test_get_checkpoints_success, test_get_checkpoints_missing_agent, test_get_checkpoints_default_limit, test_get_checkpoints_with_limit, test_get_checkpoints_empty_result, plus 2 schema tests)
-- **Build**: cargo test (176 tests pass), cargo clippy (clean), cargo fmt (clean), cargo build --release (success)
-- **Branch**: feature/4-1-mcp-server
+  - `src/server/mod.rs` (added module exports)
+  - `DEVELOPMENT_PLAN.md` (updated with completion notes)
+- **Tests**: 29 server unit tests passing (10 new checkpoint tests: test_add_checkpoint_success, test_add_checkpoint_missing_agent, test_add_checkpoint_missing_working_on, test_add_checkpoint_with_empty_state, test_get_checkpoints_success, test_get_checkpoints_missing_agent, test_get_checkpoints_default_limit, test_get_checkpoints_with_limit, test_get_checkpoints_empty_result, test_checkpoint_tool_schema, test_get_checkpoints_tool_schema)
+- **Build**: cargo test (176 total tests pass), cargo clippy (clean), cargo fmt (clean), cargo build --release (success)
+- **Branch**: feature/4-1-mcp-server (merged to main via squash merge, branch deleted)
 - **Notes**: Checkpoint tools are fully tested with comprehensive parameter validation. add_checkpoint requires agent, working_on, and state parameters. get_recent_checkpoints requires agent parameter and defaults limit to 5. Both tools properly integrate with storage layer functions.
 
-**Task 4.1 Complete**: All checkpoint MCP tools (add_checkpoint, get_recent_checkpoints) are fully implemented and tested. Ready for squash merge to main.
+**Task 4.1 Complete**: All 4 subtasks merged to main. Complete MCP server with 6 tools fully implemented and tested (search_code, search_lessons, add_lesson, add_checkpoint, get_recent_checkpoints, get_status).
 
 ---
 

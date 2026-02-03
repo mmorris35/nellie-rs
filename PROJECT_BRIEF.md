@@ -283,6 +283,31 @@ Fixed server to initialize EmbeddingService on startup:
 
 Semantic search tools (`search_code`, `search_lessons`, `search_checkpoints`) now work.
 
+### Issue #11: Tokio Async Runtime Panic (COMPLETED)
+
+**Date**: 2026-02-03
+**Type**: Bug (CRITICAL)
+**Status**: ✅ Implemented (branch `fix/async-and-sse`)
+
+Fixed "Cannot start a runtime from within a runtime" panic in embedding handlers:
+- Converted 5 handlers to `async fn`: `handle_search_code`, `handle_search_lessons`, `handle_add_lesson`, `handle_add_checkpoint`, `handle_search_checkpoints`
+- Replaced `handle.block_on()` with direct `.await`
+- Updated call sites in `invoke_tool` to use `.await`
+
+Tools `add_lesson` and `add_checkpoint` now work without crashing.
+
+### Issue #12: SSE Transport for MCP Clients (PENDING)
+
+**Date**: 2026-02-03
+**Type**: Enhancement (HIGH)
+**Status**: ⏳ Pending implementation
+
+Claude Code cannot connect - expects SSE transport at `/sse` endpoint:
+- REST endpoint works (`POST /mcp/invoke`)
+- No SSE endpoint exists
+- `rmcp` crate with `transport-sse-server` feature available but not wired up
+- Required for Claude Code `/mcp` command to work
+
 ---
 
 *This brief is ready for DevPlan MCP to generate a DEVELOPMENT_PLAN.md*

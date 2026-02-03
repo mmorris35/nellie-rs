@@ -57,26 +57,38 @@ pub use models::{CheckpointRecord, ChunkRecord, FileState, LessonRecord, SearchR
 pub use schema::{migrate, verify_schema, SCHEMA_VERSION};
 pub use search::{search_chunks, search_chunks_by_text, SearchOptions};
 pub use vector::{
-    create_vec_table, delete_vector, insert_vector, load_extension, search_similar, EMBEDDING_DIM,
+    create_vec_table, delete_vector, init_sqlite_vec, insert_vector, load_extension,
+    search_similar, EMBEDDING_DIM,
 };
 
 /// Initialize storage with migrations.
+///
+/// This initializes the sqlite-vec extension globally before any database
+/// connections are created, then runs migrations and verifies the schema.
 ///
 /// # Errors
 ///
 /// Returns an error if database initialization fails or sqlite-vec extension cannot be loaded.
 pub fn init_storage(db: &Database) -> crate::Result<()> {
+    // Initialize sqlite-vec globally - must happen before any DB connections
+    init_sqlite_vec();
+
     db.with_conn(|conn| {
-        // Load sqlite-vec extension - REQUIRED for vector search
+        // Verify sqlite-vec extension is available
         load_extension(conn)?;
 
         // Run migrations
         migrate(conn)?;
 
+        // Initialize vector tables for semantic search
+        init_chunk_vectors(conn)?;
+        init_lesson_vectors(conn)?;
+        init_checkpoint_vectors(conn)?;
+
         // Verify schema
         verify_schema(conn)?;
 
-        tracing::info!("Storage initialized, schema version {SCHEMA_VERSION}");
+        tracing::info!("Storage initialized with vector tables, schema version {SCHEMA_VERSION}");
         Ok(())
     })
 }

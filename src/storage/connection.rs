@@ -10,6 +10,7 @@ use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 use std::sync::Arc;
 
+use super::vector::init_sqlite_vec;
 use crate::error::StorageError;
 use crate::Result;
 
@@ -33,6 +34,9 @@ impl Database {
     ///
     /// Returns an error if the database cannot be opened or configured.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        // CRITICAL: Register sqlite-vec BEFORE creating any connection
+        init_sqlite_vec();
+
         let path = path.as_ref();
 
         // Create parent directories if needed
@@ -66,6 +70,9 @@ impl Database {
     ///
     /// Returns an error if the database cannot be opened.
     pub fn open_in_memory() -> Result<Self> {
+        // CRITICAL: Register sqlite-vec BEFORE creating any connection
+        init_sqlite_vec();
+
         let conn = Connection::open_in_memory().map_err(|e| {
             StorageError::Database(format!("failed to open in-memory database: {e}"))
         })?;

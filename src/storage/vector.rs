@@ -4,6 +4,8 @@
 //! for efficient similarity search.
 
 use rusqlite::Connection;
+use sqlite_vec::sqlite3_vec_init;
+use std::sync::Once;
 
 use crate::error::StorageError;
 use crate::Result;
@@ -12,25 +14,60 @@ use crate::Result;
 /// all-MiniLM-L6-v2 produces 384-dimensional vectors.
 pub const EMBEDDING_DIM: usize = 384;
 
+// Static guard to ensure sqlite-vec is initialized exactly once
+static INIT: Once = Once::new();
+
+/// Initialize sqlite-vec extension globally.
+///
+/// This must be called before any database connections are created.
+/// Uses `sqlite3_auto_extension` to register the extension globally
+/// so it's automatically available in all new connections.
+///
+/// # Safety
+///
+/// This function is safe to call multiple times - the `Once` guard ensures
+/// initialization happens exactly once. Subsequent calls are no-ops.
+#[allow(unsafe_code)]
+pub fn init_sqlite_vec() {
+    INIT.call_once(|| {
+        // SAFETY: This is safe because:
+        // 1. `sqlite3_vec_init` is a valid function pointer from sqlite-vec
+        // 2. `sqlite3_auto_extension` expects a valid extension initializer function
+        // 3. We transmute the function pointer to the expected signature (int (*)(sqlite3*, char**, const sqlite3_api_routines*))
+        // 4. The Once guard ensures this is called exactly once, preventing double-initialization
+        // 5. This follows the standard sqlite extension loading pattern described in https://alexgarcia.xyz/sqlite-vec/rust.html
+        #[allow(clippy::missing_transmute_annotations)]
+        unsafe {
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+                sqlite3_vec_init as *const (),
+            )));
+        }
+        tracing::info!("sqlite-vec extension registered globally via sqlite3_auto_extension");
+    });
+}
+
 /// Load sqlite-vec extension into a connection.
+///
+/// This verifies that the sqlite-vec extension is available and working.
+/// The actual registration happens in `init_sqlite_vec()` which must be
+/// called before any database connections are opened.
 ///
 /// # Errors
 ///
 /// Returns an error if the extension cannot be loaded or verified.
 pub fn load_extension(conn: &Connection) -> Result<()> {
-    // sqlite-vec should be statically linked when using the bundled feature
-    // We attempt to use it by executing a simple vec0 query
-    // If it fails, the extension is not available and we fail loudly
+    // Verify sqlite-vec is available by calling vec_version()
     match conn.execute_batch("SELECT vec_version();") {
         Ok(()) => {
-            tracing::info!("sqlite-vec extension loaded and verified");
+            tracing::debug!("sqlite-vec extension verified");
             Ok(())
         }
         Err(e) => {
             let err_msg = format!(
-                "sqlite-vec extension failed to load. \
+                "sqlite-vec extension not available. \
                  Vector search will not work. \
                  This is a CRITICAL error - embeddings cannot be stored. \
+                 Make sure init_sqlite_vec() was called before database init. \
                  Error: {e}"
             );
             tracing::error!("{err_msg}");
@@ -176,6 +213,9 @@ mod tests {
     use crate::storage::Database;
 
     fn create_test_db() -> Database {
+        // Initialize sqlite-vec globally before creating database
+        init_sqlite_vec();
+
         let db = Database::open_in_memory().unwrap();
         db.with_conn(|conn| {
             load_extension(conn)?;
@@ -186,14 +226,25 @@ mod tests {
     }
 
     #[test]
+    fn test_init_sqlite_vec() {
+        // Calling multiple times should be safe (Once guard)
+        init_sqlite_vec();
+        init_sqlite_vec();
+        // If we get here without panicking, the test passes
+    }
+
+    #[test]
     fn test_load_extension() {
+        init_sqlite_vec();
         let db = Database::open_in_memory().unwrap();
         db.with_conn(|conn| {
             let result = load_extension(conn);
-            // Extension may or may not be available depending on build
-            if result.is_err() {
-                eprintln!("sqlite-vec not available: {:?}", result);
-            }
+            // Should succeed now that init_sqlite_vec has been called
+            assert!(
+                result.is_ok(),
+                "sqlite-vec should be available after init_sqlite_vec: {:?}",
+                result
+            );
             Ok(())
         })
         .unwrap();
@@ -216,9 +267,8 @@ mod tests {
     }
 
     // Integration tests that require sqlite-vec extension
-    // These are marked with #[ignore] if extension is not available
+    // These should now pass without #[ignore] since init_sqlite_vec is called
     #[test]
-    #[ignore = "requires sqlite-vec extension"]
     fn test_create_vec_table() {
         let db = create_test_db();
         db.with_conn(|conn| {
@@ -229,7 +279,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires sqlite-vec extension"]
     fn test_insert_and_search() {
         let db = create_test_db();
 
@@ -256,7 +305,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires sqlite-vec extension"]
     fn test_delete_vector() {
         let db = create_test_db();
 

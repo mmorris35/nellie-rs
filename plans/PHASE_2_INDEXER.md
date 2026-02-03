@@ -472,10 +472,10 @@ cargo test watcher:: --verbose 2>&1 | tail -30
 - [x] 2.1.1: Set Up notify-rs File Watcher
 
 **Deliverables**:
-- [ ] Create file filter using ignore crate
-- [ ] Support .gitignore patterns
-- [ ] Add language detection
-- [ ] Write filter tests
+- [x] Create file filter using ignore crate
+- [x] Support .gitignore patterns
+- [x] Add language detection
+- [x] Write filter tests
 
 **Files to Create**:
 
@@ -764,25 +764,25 @@ cargo test watcher::filter:: --verbose 2>&1 | tail -30
 ```
 
 **Success Criteria**:
-- [ ] File extension detection works
-- [ ] Language detection works
-- [ ] Gitignore patterns respected
-- [ ] Default ignores work
-- [ ] All filter tests pass
-- [ ] Commit made with message "feat(watcher): add gitignore-aware file filtering"
+- [x] File extension detection works
+- [x] Language detection works
+- [x] Gitignore patterns respected
+- [x] Default ignores work
+- [x] All filter tests pass
+- [x] Commit made with message "feat(watcher): add gitignore-aware file filtering"
 
 ---
 
 **Completion Notes**:
-- **Implementation**: (describe what was done)
+- **Implementation**: Created FileFilter struct with gitignore-aware file filtering using the ignore crate. Supports language detection for 33+ file types and default ignore patterns (node_modules, .git, target, etc.)
 - **Files Created**:
-  - `src/watcher/filter.rs` (X lines)
+  - `src/watcher/filter.rs` (282 lines)
 - **Files Modified**:
-  - `src/watcher/mod.rs` (X lines)
-- **Tests**: X tests passing
-- **Build**: ✅ cargo test passes
+  - `src/watcher/mod.rs` (updated to export FileFilter)
+- **Tests**: 5 filter tests passing (test_is_code_file, test_detect_language, test_default_ignored, test_filter_with_gitignore, test_filter_with_patterns)
+- **Build**: ✅ cargo test passes (100 tests total)
 - **Branch**: feature/2-1-file-watcher
-- **Notes**: (any additional context)
+- **Notes**: Implemented with proper clippy compliance and comprehensive test coverage. All supported languages include rust, python, javascript, typescript, go, java, c, cpp, csharp, ruby, php, swift, kotlin, scala, shell, sql, markdown, yaml, json, toml, xml, html, css, scss, vue, and svelte.
 
 ---
 
@@ -792,10 +792,10 @@ cargo test watcher::filter:: --verbose 2>&1 | tail -30
 - [x] 2.1.2: Implement Gitignore-Aware Filtering
 
 **Deliverables**:
-- [ ] Create event handler that processes batches
-- [ ] Integrate filter with watcher
-- [ ] Add event statistics tracking
-- [ ] Write handler tests
+- [x] Create event handler that processes batches
+- [x] Integrate filter with watcher
+- [x] Add event statistics tracking
+- [x] Write handler tests
 
 **Files to Create**:
 
@@ -1039,24 +1039,24 @@ cargo test watcher:: --verbose 2>&1 | grep "test result"
 ```
 
 **Success Criteria**:
-- [ ] Event handler processes batches
-- [ ] Filtering integrated correctly
-- [ ] Stats tracking works
-- [ ] All handler tests pass
-- [ ] Commit made with message "feat(watcher): create event handler with stats tracking"
+- [x] Event handler processes batches
+- [x] Filtering integrated correctly
+- [x] Stats tracking works
+- [x] All handler tests pass
+- [x] Commit made with message "feat(watcher): create event handler with stats tracking"
 
 ---
 
 **Completion Notes**:
-- **Implementation**: (describe what was done)
+- **Implementation**: Created EventHandler that processes file change batches, integrating the FileFilter for intelligent filtering. Implemented atomic statistics tracking (WatcherStats) to monitor files_detected, files_filtered, files_indexed, files_deleted, and errors. Handler accepts IndexRequest messages for modified files and PathBuf messages for deletions.
 - **Files Created**:
-  - `src/watcher/handler.rs` (X lines)
+  - `src/watcher/handler.rs` (222 lines)
 - **Files Modified**:
-  - `src/watcher/mod.rs` (X lines)
-- **Tests**: X tests passing
-- **Build**: ✅ cargo test passes
+  - `src/watcher/mod.rs` (22 lines, added handler module and exports)
+- **Tests**: 2 new handler tests passing (test_handler_filters_files, test_handler_processes_deletes), total 16 watcher tests passing
+- **Build**: ✅ cargo test passes (102 total tests), cargo clippy clean, cargo fmt clean, cargo build --release succeeds
 - **Branch**: feature/2-1-file-watcher
-- **Notes**: (any additional context)
+- **Notes**: Fixed clippy warning by taking config reference instead of by value. Tests verify filtering integration (image.png filtered out, main.rs indexed with language detection) and delete processing works correctly.
 
 ---
 

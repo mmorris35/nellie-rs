@@ -5,11 +5,18 @@
 //! - Gitignore-aware file filtering
 //! - Incremental indexing of changed files
 
-// Submodules will be added in Phase 2
-// mod indexer;
-// mod filter;
+mod events;
+mod filter;
+mod handler;
+#[allow(clippy::module_inception)]
+mod watcher;
 
-/// Placeholder for watcher initialization.
+pub use events::{EventBatch, FileEvent};
+pub use filter::FileFilter;
+pub use handler::{EventHandler, HandlerConfig, IndexRequest, WatcherStats, WatcherStatsSnapshot};
+pub use watcher::{FileWatcher, WatcherConfig};
+
+/// Initialize watcher module.
 pub fn init() {
     tracing::debug!("Watcher module initialized");
 }

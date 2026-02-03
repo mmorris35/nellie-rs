@@ -9,6 +9,8 @@
 mod chunks;
 mod connection;
 mod file_state;
+mod lessons;
+mod lessons_search;
 mod models;
 mod schema;
 mod search;
@@ -23,6 +25,15 @@ pub use connection::Database;
 pub use file_state::{
     count_tracked_files, delete_file_state, find_stale_entries, get_file_state, list_file_paths,
     needs_reindex, upsert_file_state,
+};
+pub use lessons::{
+    count_lessons, delete_lesson, get_lesson, insert_lesson, list_lessons, list_lessons_by_agent,
+    list_lessons_by_severity, update_lesson,
+};
+pub use lessons_search::{
+    filter_lessons_by_tag_and_severity, get_all_tags, init_lesson_vectors,
+    search_lessons_by_embedding, search_lessons_by_tag, search_lessons_by_tags_all,
+    search_lessons_by_tags_any, search_lessons_by_text, store_lesson_embedding,
 };
 pub use models::{CheckpointRecord, ChunkRecord, FileState, LessonRecord, SearchResult};
 pub use schema::{migrate, verify_schema, SCHEMA_VERSION};

@@ -107,7 +107,7 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [x] 2.2.3: Add file state tracking for change detection
 
 ### Phase 3: Lessons & Checkpoints (1 week)
-- [ ] 3.1.1: Implement lessons storage and CRUD
+- [x] 3.1.1: Implement lessons storage and CRUD
 - [ ] 3.1.2: Add lesson search with semantic matching
 - [ ] 3.1.3: Implement tag-based filtering
 - [ ] 3.2.1: Implement checkpoint storage

@@ -345,9 +345,9 @@ curl http://localhost:8766/health
 
 ---
 
-### Issue #10: Enable EmbeddingService initialization in server startup - PENDING
+### Issue #10: Enable EmbeddingService initialization in server startup - COMPLETED
 
-**Status**: ⏳ PENDING
+**Status**: ✅ COMPLETED (2026-02-03)
 **Type**: Bug (HIGH priority)
 **GitHub**: https://github.com/mmorris35/nellie-rs/issues/10
 

@@ -268,19 +268,20 @@ Added deployment infrastructure for Mac Mini (mini-dev-server):
 
 Enables parallel operation on port 8766 alongside existing Python Nellie on 8765 for safe migration.
 
-### Issue #10: EmbeddingService Initialization (PENDING)
+### Issue #10: EmbeddingService Initialization (COMPLETED)
 
-**Date**: 2026-02-03 (identified)
+**Date**: 2026-02-03
 **Type**: Bug (HIGH)
-**Status**: ⏳ Pending implementation
+**Status**: ✅ Implemented (commit 5c79109)
 
-Server currently starts without initializing EmbeddingService, breaking all semantic search tools. Fix requires:
-- Update `ServerConfig` with embedding configuration
-- Initialize `EmbeddingService` in `App::new()`
-- Wire up configuration in `main.rs`
-- Document model file requirements
+Fixed server to initialize EmbeddingService on startup:
+- Updated `ServerConfig` with `data_dir`, `embedding_threads`, `enable_embeddings`
+- Made `App::new()` async to initialize embeddings during startup
+- Added `--disable-embeddings` CLI flag for deployments without models
+- Graceful fallback if model files missing
+- Updated OPERATOR_GUIDE.md with model download instructions
 
-See DEVELOPMENT_PLAN.md for detailed implementation plan.
+Semantic search tools (`search_code`, `search_lessons`, `search_checkpoints`) now work.
 
 ---
 

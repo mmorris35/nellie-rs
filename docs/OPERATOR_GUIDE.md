@@ -69,7 +69,19 @@ curl -sSL https://raw.githubusercontent.com/sequeldata/nellie-rs/main/packaging/
 4. **Download embedding model:**
    ```bash
    sudo -u nellie mkdir -p /var/lib/nellie/models
-   # Download model files (URLs to be determined)
+
+   # Download all-MiniLM-L6-v2 ONNX model (smallest recommended)
+   # From: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/blob/main/onnx/model.onnx
+   cd /var/lib/nellie/models
+   sudo -u nellie curl -L -o all-MiniLM-L6-v2.onnx \
+     "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx"
+
+   # Download tokenizer (same model repo)
+   sudo -u nellie curl -L -o tokenizer.json \
+     "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json"
+
+   # Verify files exist
+   sudo ls -lh /var/lib/nellie/models/
    ```
 
 5. **Start service:**
@@ -103,6 +115,47 @@ NELLIE_WATCH_DIRS=/home/dev/projects
 
 # Optional: API authentication
 # NELLIE_API_KEY=your-secret-key
+```
+
+### Embedding Model Configuration
+
+Nellie uses ONNX-format embedding models for semantic search. The default model is **all-MiniLM-L6-v2**, which provides excellent search quality with minimal resource requirements.
+
+**Model Requirements:**
+
+The model must be placed in `{NELLIE_DATA_DIR}/models/`:
+- `all-MiniLM-L6-v2.onnx` - The compiled ONNX model (22 MB)
+- `tokenizer.json` - Tokenizer configuration (248 KB)
+
+**Available Models:**
+
+| Model | Size | Quality | Inference Speed |
+|-------|------|---------|-----------------|
+| all-MiniLM-L6-v2 | 22 MB | High | Fast (recommended) |
+| nomic-embed-text-v1 | 274 MB | Very High | Medium |
+
+**Installation:**
+
+```bash
+# For all-MiniLM-L6-v2 (recommended)
+cd /var/lib/nellie/models
+sudo -u nellie curl -L -o all-MiniLM-L6-v2.onnx \
+  "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx"
+sudo -u nellie curl -L -o tokenizer.json \
+  "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json"
+
+# Verify
+ls -lh /var/lib/nellie/models/
+```
+
+**Disabling Embeddings:**
+
+If the model files are missing or you want to disable semantic search:
+
+```bash
+# Start without embeddings (only keyword search available)
+sudo systemctl set-environment NELLIE_DISABLE_EMBEDDINGS=1
+sudo systemctl start nellie
 ```
 
 ### Tuning for Large Deployments

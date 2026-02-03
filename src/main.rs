@@ -11,6 +11,7 @@ use nellie::server::{init_metrics, init_tracing, App, ServerConfig};
 use nellie::storage::{init_storage, Database};
 use nellie::{Config, Result};
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Nellie Production - Semantic code memory system for enterprise teams
 ///
@@ -71,6 +72,10 @@ enum Commands {
         /// Number of embedding worker threads
         #[arg(long, env = "NELLIE_EMBEDDING_THREADS", default_value = "4")]
         embedding_threads: usize,
+
+        /// Disable embedding service (semantic search will not work)
+        #[arg(long, env = "NELLIE_DISABLE_EMBEDDINGS")]
+        disable_embeddings: bool,
     },
 
     /// Manually index a directory
@@ -143,16 +148,18 @@ async fn main() -> Result<()> {
             port,
             watch,
             embedding_threads,
+            disable_embeddings,
         }) => {
-            serve_command(
-                cli.data_dir,
+            serve_command(ServeCommandArgs {
+                data_dir: cli.data_dir,
                 host,
                 port,
                 watch,
                 embedding_threads,
-                cli.log_level,
-                cli.api_key,
-            )
+                log_level: cli.log_level,
+                api_key: cli.api_key,
+                disable_embeddings,
+            })
             .await
         }
         Some(Commands::Index {
@@ -169,22 +176,23 @@ async fn main() -> Result<()> {
         None => {
             // Default to serve command for backward compatibility
             tracing::info!("No command specified, starting server (use 'serve' explicitly)");
-            serve_command(
-                cli.data_dir,
-                "127.0.0.1".to_string(),
-                8080,
-                vec![],
-                4,
-                cli.log_level,
-                cli.api_key,
-            )
+            serve_command(ServeCommandArgs {
+                data_dir: cli.data_dir,
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+                watch: vec![],
+                embedding_threads: 4,
+                log_level: cli.log_level,
+                api_key: cli.api_key,
+                disable_embeddings: false,
+            })
             .await
         }
     }
 }
 
-/// Serve command: Start the Nellie server
-async fn serve_command(
+/// Command arguments for serve subcommand.
+struct ServeCommandArgs {
     data_dir: PathBuf,
     host: String,
     port: u16,
@@ -192,18 +200,22 @@ async fn serve_command(
     embedding_threads: usize,
     log_level: String,
     api_key: Option<String>,
-) -> Result<()> {
+    disable_embeddings: bool,
+}
+
+/// Serve command: Start the Nellie server
+async fn serve_command(args: ServeCommandArgs) -> Result<()> {
     tracing::info!("Starting Nellie server...");
 
     // Build config from CLI arguments
     let config = Config {
-        data_dir,
-        host: host.clone(),
-        port,
-        log_level,
-        watch_dirs: watch.clone(),
-        embedding_threads,
-        api_key: api_key.clone(),
+        data_dir: args.data_dir.clone(),
+        host: args.host.clone(),
+        port: args.port,
+        log_level: args.log_level,
+        watch_dirs: args.watch.clone(),
+        embedding_threads: args.embedding_threads,
+        api_key: args.api_key.clone(),
     };
 
     tracing::debug!(?config, "Configuration loaded");
@@ -213,12 +225,12 @@ async fn serve_command(
 
     tracing::info!(
         "Server binding to {}:{}, data directory: {:?}",
-        host,
-        port,
+        args.host,
+        args.port,
         config.data_dir
     );
 
-    if api_key.is_some() {
+    if args.api_key.is_some() {
         tracing::info!("API key authentication enabled");
     } else {
         tracing::warn!(
@@ -226,8 +238,17 @@ async fn serve_command(
         );
     }
 
-    if !watch.is_empty() {
-        tracing::info!("Watching directories: {:?}", watch);
+    if args.disable_embeddings {
+        tracing::warn!("Embeddings disabled - semantic search will not work");
+    } else {
+        tracing::info!(
+            "Embedding service will be initialized (uses {} threads)",
+            args.embedding_threads
+        );
+    }
+
+    if !args.watch.is_empty() {
+        tracing::info!("Watching directories: {:?}", args.watch);
     }
 
     // Initialize database
@@ -239,13 +260,16 @@ async fn serve_command(
 
     // Create and run server
     let server_config = ServerConfig {
-        host,
-        port,
-        api_key,
-        ..Default::default()
+        host: args.host,
+        port: args.port,
+        shutdown_timeout: Duration::from_secs(30),
+        api_key: args.api_key,
+        data_dir: config.data_dir,
+        embedding_threads: args.embedding_threads,
+        enable_embeddings: !args.disable_embeddings,
     };
 
-    let app = App::new(server_config, db);
+    let app = App::new(server_config, db).await?;
     app.run().await
 }
 
@@ -391,12 +415,14 @@ mod tests {
             port,
             watch,
             embedding_threads,
+            disable_embeddings,
         }) = cli.command
         {
             assert_eq!(host, "0.0.0.0");
             assert_eq!(port, 9000);
             assert!(watch.is_empty());
             assert_eq!(embedding_threads, 4);
+            assert!(!disable_embeddings);
         } else {
             panic!("Expected Serve command");
         }
@@ -515,10 +541,26 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_disable_embeddings() {
+        let args = vec!["nellie", "serve", "--disable-embeddings"];
+        let cli = Cli::try_parse_from(args);
+        assert!(cli.is_ok());
+        let cli = cli.unwrap();
+        if let Some(Commands::Serve {
+            disable_embeddings, ..
+        }) = cli.command
+        {
+            assert!(disable_embeddings);
+        } else {
+            panic!("Expected Serve command");
+        }
+    }
+
+    #[test]
     fn test_cli_help_message() {
         // Test that help parsing doesn't crash
         let args = vec!["nellie", "--help"];
-        let cli = Cli::try_parse_from(args);
+        let _cli = Cli::try_parse_from(args);
         // --help causes exit, so we just verify parsing doesn't panic
         // Real test would need to capture output
     }

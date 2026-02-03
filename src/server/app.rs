@@ -21,6 +21,7 @@ use tower_http::trace::TraceLayer;
 use super::auth::ApiKeyConfig;
 use super::mcp::{create_mcp_router, McpState};
 use super::rest::create_rest_router;
+use crate::embeddings::{EmbeddingConfig, EmbeddingService};
 use crate::storage::Database;
 use crate::Result;
 
@@ -35,6 +36,12 @@ pub struct ServerConfig {
     pub shutdown_timeout: Duration,
     /// API key for authentication (None = disabled)
     pub api_key: Option<String>,
+    /// Data directory for models and embeddings
+    pub data_dir: std::path::PathBuf,
+    /// Number of embedding worker threads
+    pub embedding_threads: usize,
+    /// Enable embedding service (semantic search)
+    pub enable_embeddings: bool,
 }
 
 impl Default for ServerConfig {
@@ -44,6 +51,9 @@ impl Default for ServerConfig {
             port: 8080,
             shutdown_timeout: Duration::from_secs(30),
             api_key: None,
+            data_dir: std::path::PathBuf::from("./data"),
+            embedding_threads: 4,
+            enable_embeddings: true,
         }
     }
 }
@@ -57,6 +67,9 @@ pub struct App {
 impl App {
     /// Create a new application.
     ///
+    /// Initializes the embedding service if enabled, falling back gracefully
+    /// if model files are missing.
+    ///
     /// # Arguments
     ///
     /// * `config` - Server configuration
@@ -65,10 +78,61 @@ impl App {
     /// # Returns
     ///
     /// New application instance
-    #[must_use]
-    pub fn new(config: ServerConfig, db: Database) -> Self {
-        let state = Arc::new(McpState::with_api_key(db, config.api_key.clone()));
-        Self { config, state }
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database operations fail.
+    pub async fn new(config: ServerConfig, db: Database) -> Result<Self> {
+        let state = if config.enable_embeddings {
+            // Try to initialize embedding service
+            match Self::init_embeddings(&config).await {
+                Ok(embedding_service) => {
+                    tracing::info!("Embedding service initialized successfully");
+                    Arc::new(McpState::with_embeddings_and_api_key(
+                        db,
+                        embedding_service,
+                        config.api_key.clone(),
+                    ))
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to initialize embeddings: {}. Semantic search disabled.",
+                        e
+                    );
+                    Arc::new(McpState::with_api_key(db, config.api_key.clone()))
+                }
+            }
+        } else {
+            tracing::warn!("Embeddings disabled via configuration - semantic search will not work");
+            Arc::new(McpState::with_api_key(db, config.api_key.clone()))
+        };
+
+        Ok(Self { config, state })
+    }
+
+    /// Initialize the embedding service.
+    ///
+    /// Loads the ONNX model and starts worker threads.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Server configuration
+    ///
+    /// # Returns
+    ///
+    /// Initialized embedding service
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if model loading fails.
+    async fn init_embeddings(config: &ServerConfig) -> Result<EmbeddingService> {
+        let embedding_config =
+            EmbeddingConfig::from_data_dir(&config.data_dir, config.embedding_threads);
+
+        let service = EmbeddingService::new(embedding_config);
+        service.init().await?;
+
+        Ok(service)
     }
 
     /// Get the API key configuration for this app.
@@ -272,6 +336,9 @@ mod tests {
         assert_eq!(config.port, 8080);
         assert_eq!(config.shutdown_timeout, Duration::from_secs(30));
         assert_eq!(config.api_key, None);
+        assert_eq!(config.data_dir, std::path::PathBuf::from("./data"));
+        assert_eq!(config.embedding_threads, 4);
+        assert!(config.enable_embeddings);
     }
 
     #[test]
@@ -281,31 +348,43 @@ mod tests {
             port: 9000,
             shutdown_timeout: Duration::from_secs(60),
             api_key: Some("test-key".to_string()),
+            data_dir: std::path::PathBuf::from("/custom/data"),
+            embedding_threads: 8,
+            enable_embeddings: false,
         };
         assert_eq!(config.host, "0.0.0.0");
         assert_eq!(config.port, 9000);
         assert_eq!(config.shutdown_timeout, Duration::from_secs(60));
         assert_eq!(config.api_key, Some("test-key".to_string()));
+        assert_eq!(config.data_dir, std::path::PathBuf::from("/custom/data"));
+        assert_eq!(config.embedding_threads, 8);
+        assert!(!config.enable_embeddings);
     }
 
-    #[test]
-    fn test_app_creation() {
-        let config = ServerConfig::default();
+    #[tokio::test]
+    async fn test_app_creation() {
+        let config = ServerConfig {
+            enable_embeddings: false, // Disable embeddings for testing
+            ..Default::default()
+        };
         let db = Database::open_in_memory().unwrap();
         db.with_conn(|conn| migrate(conn)).unwrap();
 
-        let _app = App::new(config, db);
-        // App created successfully
-        assert!(true);
+        let app = App::new(config, db).await;
+        // App created successfully without embeddings
+        assert!(app.is_ok());
     }
 
-    #[test]
-    fn test_app_router() {
-        let config = ServerConfig::default();
+    #[tokio::test]
+    async fn test_app_router() {
+        let config = ServerConfig {
+            enable_embeddings: false, // Disable embeddings for testing
+            ..Default::default()
+        };
         let db = Database::open_in_memory().unwrap();
         db.with_conn(|conn| migrate(conn)).unwrap();
 
-        let app = App::new(config, db);
+        let app = App::new(config, db).await.unwrap();
         let _router = app.router();
         // Router created successfully
         assert!(true);
@@ -313,11 +392,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_without_auth() {
-        let config = ServerConfig::default();
+        let config = ServerConfig {
+            enable_embeddings: false,
+            ..Default::default()
+        };
         let db = Database::open_in_memory().unwrap();
         db.with_conn(|conn| migrate(conn)).unwrap();
 
-        let app = App::new(config, db);
+        let app = App::new(config, db).await.unwrap();
         let router = app.router();
 
         let response = router
@@ -335,11 +417,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_metrics_without_api_key_auth_disabled() {
-        let config = ServerConfig::default();
+        let config = ServerConfig {
+            enable_embeddings: false,
+            ..Default::default()
+        };
         let db = Database::open_in_memory().unwrap();
         db.with_conn(|conn| migrate(conn)).unwrap();
 
-        let app = App::new(config, db);
+        let app = App::new(config, db).await.unwrap();
         let router = app.router();
 
         let response = router
@@ -359,12 +444,13 @@ mod tests {
     async fn test_metrics_without_api_key_auth_enabled() {
         let config = ServerConfig {
             api_key: Some("secret-key".to_string()),
+            enable_embeddings: false,
             ..Default::default()
         };
         let db = Database::open_in_memory().unwrap();
         db.with_conn(|conn| migrate(conn)).unwrap();
 
-        let app = App::new(config, db);
+        let app = App::new(config, db).await.unwrap();
         let router = app.router();
 
         let response = router
@@ -384,12 +470,13 @@ mod tests {
     async fn test_metrics_with_wrong_api_key() {
         let config = ServerConfig {
             api_key: Some("secret-key".to_string()),
+            enable_embeddings: false,
             ..Default::default()
         };
         let db = Database::open_in_memory().unwrap();
         db.with_conn(|conn| migrate(conn)).unwrap();
 
-        let app = App::new(config, db);
+        let app = App::new(config, db).await.unwrap();
         let router = app.router();
 
         let response = router
@@ -410,12 +497,13 @@ mod tests {
     async fn test_metrics_with_correct_api_key_header() {
         let config = ServerConfig {
             api_key: Some("secret-key".to_string()),
+            enable_embeddings: false,
             ..Default::default()
         };
         let db = Database::open_in_memory().unwrap();
         db.with_conn(|conn| migrate(conn)).unwrap();
 
-        let app = App::new(config, db);
+        let app = App::new(config, db).await.unwrap();
         let router = app.router();
 
         let response = router
@@ -436,12 +524,13 @@ mod tests {
     async fn test_metrics_with_correct_bearer_token() {
         let config = ServerConfig {
             api_key: Some("secret-key".to_string()),
+            enable_embeddings: false,
             ..Default::default()
         };
         let db = Database::open_in_memory().unwrap();
         db.with_conn(|conn| migrate(conn)).unwrap();
 
-        let app = App::new(config, db);
+        let app = App::new(config, db).await.unwrap();
         let router = app.router();
 
         let response = router

@@ -131,8 +131,8 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [ ] 5.2.2: Generate API documentation
 - [ ] 5.2.3: Create operator guide
 
-**Current Phase**: 4 (MCP & REST API)
-**Next Subtask**: 4.2.3
+**Current Phase**: 5 (Packaging & Documentation)
+**Next Subtask**: 5.1.1
 
 **Completion Notes (4.1.4)**:
 - **Implementation**: Implemented comprehensive test coverage for checkpoint MCP tools (add_checkpoint and get_recent_checkpoints). Both handlers were already present from 4.1.1 setup but lacked test coverage. Added 10 new unit tests covering all parameter validation, error handling, and success cases.
@@ -186,6 +186,8 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - **Build**: cargo test (189 total tests pass), cargo clippy (clean, -D warnings), cargo fmt (clean), cargo build --release (success)
 - **Branch**: feature/4-2-rest-api
 - **Notes**: Structured logging fully operational. Tested server startup with both plain text logging (default) and JSON logging (NELLIE_LOG_JSON=true). All spans properly propagate request context including method, URI, and request_id headers. TraceLayer captures HTTP request lifecycle with status codes logged on response. Both SIGTERM and Ctrl+C properly shutdown with graceful logging. Ready for Task 4.2 merge.
+
+**Task 4.2 Complete**: All 3 subtasks merged to main. Complete REST API with health/metrics endpoints, graceful shutdown coordination, and comprehensive structured logging and observability. Feature branch `feature/4-2-rest-api` deleted after squash merge. All 189 tests passing. Phase 4 (MCP & REST API) is now COMPLETE.
 
 ---
 

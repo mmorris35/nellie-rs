@@ -224,6 +224,46 @@ pub fn get_tools() -> Vec<ToolInfo> {
                 "properties": {}
             }),
         },
+        ToolInfo {
+            name: "search_checkpoints".to_string(),
+            description: Some("Search checkpoints semantically by query text".to_string()),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Query text to search checkpoints"
+                    },
+                    "agent": {
+                        "type": "string",
+                        "description": "Optional agent filter to search only this agent's checkpoints"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum checkpoints to return (default: 5)",
+                        "default": 5
+                    }
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolInfo {
+            name: "get_agent_status".to_string(),
+            description: Some(
+                "Get quick status for an agent (idle/in_progress, current task, checkpoint count)"
+                    .to_string(),
+            ),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent": {
+                        "type": "string",
+                        "description": "Agent identifier"
+                    }
+                },
+                "required": ["agent"]
+            }),
+        },
     ]
 }
 
@@ -279,6 +319,8 @@ async fn invoke_tool(
         "get_recent_checkpoints" => handle_get_checkpoints(&state, &request.arguments),
         "trigger_reindex" => handle_trigger_reindex(&state, &request.arguments),
         "get_status" => handle_get_status(&state),
+        "search_checkpoints" => handle_search_checkpoints(&state, &request.arguments),
+        "get_agent_status" => handle_get_agent_status(&state, &request.arguments),
         _ => Err(format!("Unknown tool: {}", request.name)),
     };
 
@@ -580,6 +622,59 @@ fn handle_get_status(state: &McpState) -> std::result::Result<serde_json::Value,
     }))
 }
 
+#[allow(clippy::redundant_closure, clippy::cast_possible_truncation)]
+fn handle_search_checkpoints(
+    state: &McpState,
+    args: &serde_json::Value,
+) -> std::result::Result<serde_json::Value, String> {
+    let query = args["query"].as_str().ok_or("query is required")?;
+    let agent_filter = args["agent"].as_str();
+    let limit = args["limit"].as_u64().unwrap_or(5) as usize;
+
+    let checkpoints = if let Some(agent) = agent_filter {
+        // Search only for specific agent
+        state
+            .db
+            .with_conn(|conn| crate::storage::search_checkpoints_by_agent(conn, agent, limit))
+            .map_err(|e| e.to_string())?
+    } else {
+        // Search all checkpoints by text query
+        state
+            .db
+            .with_conn(|conn| crate::storage::search_checkpoints_by_text(conn, query, limit))
+            .map_err(|e| e.to_string())?
+    };
+
+    Ok(serde_json::json!({
+        "checkpoints": serde_json::to_value(&checkpoints).unwrap_or(serde_json::Value::Array(vec![])),
+        "count": checkpoints.len(),
+        "query": query,
+        "agent": agent_filter.unwrap_or("all"),
+        "limit": limit
+    }))
+}
+
+#[allow(clippy::redundant_closure)]
+fn handle_get_agent_status(
+    state: &McpState,
+    args: &serde_json::Value,
+) -> std::result::Result<serde_json::Value, String> {
+    let agent = args["agent"].as_str().ok_or("agent is required")?;
+
+    let status = state
+        .db
+        .with_conn(|conn| crate::storage::get_agent_status(conn, agent))
+        .map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "agent": status.agent,
+        "status": status.status.as_str(),
+        "current_task": status.current_task,
+        "last_updated": status.last_updated,
+        "checkpoint_count": status.checkpoint_count
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -587,7 +682,7 @@ mod tests {
     #[test]
     fn test_tools_defined() {
         let tools = get_tools();
-        assert!(tools.len() >= 9);
+        assert!(tools.len() >= 11);
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"search_code"));
@@ -599,6 +694,8 @@ mod tests {
         assert!(names.contains(&"get_recent_checkpoints"));
         assert!(names.contains(&"trigger_reindex"));
         assert!(names.contains(&"get_status"));
+        assert!(names.contains(&"search_checkpoints"));
+        assert!(names.contains(&"get_agent_status"));
     }
 
     #[tokio::test]
@@ -1438,6 +1535,288 @@ mod tests {
             .expect("get_recent_checkpoints tool should exist");
 
         let schema = &get_checkpoints.input_schema;
+        let required = schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .expect("required field should be an array");
+
+        assert!(required.iter().any(|v| v.as_str() == Some("agent")));
+    }
+
+    #[test]
+    fn test_search_checkpoints_tool_exists() {
+        let tools = get_tools();
+        let search_checkpoints = tools
+            .iter()
+            .find(|t| t.name == "search_checkpoints")
+            .expect("search_checkpoints tool should exist");
+
+        assert!(search_checkpoints.description.is_some());
+        let desc = search_checkpoints
+            .description
+            .as_ref()
+            .unwrap()
+            .to_lowercase();
+        assert!(desc.contains("search"));
+        assert!(desc.contains("checkpoint"));
+    }
+
+    #[test]
+    fn test_get_agent_status_tool_exists() {
+        let tools = get_tools();
+        let get_agent_status = tools
+            .iter()
+            .find(|t| t.name == "get_agent_status")
+            .expect("get_agent_status tool should exist");
+
+        assert!(get_agent_status.description.is_some());
+        let desc = get_agent_status
+            .description
+            .as_ref()
+            .unwrap()
+            .to_lowercase();
+        assert!(desc.contains("status"));
+    }
+
+    #[test]
+    fn test_search_checkpoints_success() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| -> crate::Result<()> {
+            crate::storage::migrate(conn)?;
+
+            // Insert test checkpoints
+            let checkpoint1 = crate::storage::CheckpointRecord::new(
+                "agent-1",
+                "Working on feature implementation",
+                serde_json::json!({"step": 1}),
+            );
+            crate::storage::insert_checkpoint(conn, &checkpoint1)?;
+
+            let checkpoint2 = crate::storage::CheckpointRecord::new(
+                "agent-2",
+                "Debugging test failures",
+                serde_json::json!({"step": 2}),
+            );
+            crate::storage::insert_checkpoint(conn, &checkpoint2)?;
+
+            Ok(())
+        })
+        .expect("Failed to setup");
+        let state = McpState::new(db);
+
+        let args = serde_json::json!({
+            "query": "feature",
+            "limit": 5
+        });
+
+        let result = handle_search_checkpoints(&state, &args);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert!(response.get("checkpoints").is_some());
+        assert!(response.get("count").is_some());
+        assert_eq!(response["query"], "feature");
+    }
+
+    #[test]
+    fn test_search_checkpoints_with_agent_filter() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| -> crate::Result<()> {
+            crate::storage::migrate(conn)?;
+
+            // Insert checkpoints for different agents
+            let checkpoint1 =
+                crate::storage::CheckpointRecord::new("agent-1", "Task 1", serde_json::json!({}));
+            crate::storage::insert_checkpoint(conn, &checkpoint1)?;
+
+            let checkpoint2 =
+                crate::storage::CheckpointRecord::new("agent-1", "Task 2", serde_json::json!({}));
+            crate::storage::insert_checkpoint(conn, &checkpoint2)?;
+
+            let checkpoint3 =
+                crate::storage::CheckpointRecord::new("agent-2", "Task 3", serde_json::json!({}));
+            crate::storage::insert_checkpoint(conn, &checkpoint3)?;
+
+            Ok(())
+        })
+        .expect("Failed to setup");
+        let state = McpState::new(db);
+
+        let args = serde_json::json!({
+            "query": "ignored",
+            "agent": "agent-1",
+            "limit": 10
+        });
+
+        let result = handle_search_checkpoints(&state, &args);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response["agent"], "agent-1");
+    }
+
+    #[test]
+    fn test_search_checkpoints_missing_query() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| crate::storage::migrate(conn))
+            .expect("Failed to migrate");
+        let state = McpState::new(db);
+
+        let args = serde_json::json!({
+            "limit": 5
+        });
+
+        let result = handle_search_checkpoints(&state, &args);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("query is required"));
+    }
+
+    #[test]
+    fn test_search_checkpoints_default_limit() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| crate::storage::migrate(conn))
+            .expect("Failed to migrate");
+        let state = McpState::new(db);
+
+        let args = serde_json::json!({
+            "query": "test"
+        });
+
+        let result = handle_search_checkpoints(&state, &args);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response["limit"], 5);
+    }
+
+    #[test]
+    fn test_get_agent_status_success() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| -> crate::Result<()> {
+            crate::storage::migrate(conn)?;
+
+            // Mark agent as in progress
+            crate::storage::mark_in_progress(conn, "test-agent", Some("Working on task"))?;
+
+            Ok(())
+        })
+        .expect("Failed to setup");
+        let state = McpState::new(db);
+
+        let args = serde_json::json!({
+            "agent": "test-agent"
+        });
+
+        let result = handle_get_agent_status(&state, &args);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response["agent"], "test-agent");
+        assert_eq!(response["status"], "in_progress");
+        assert!(response.get("current_task").is_some());
+        assert!(response.get("last_updated").is_some());
+        assert!(response.get("checkpoint_count").is_some());
+    }
+
+    #[test]
+    fn test_get_agent_status_idle() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| crate::storage::migrate(conn))
+            .expect("Failed to migrate");
+        let state = McpState::new(db);
+
+        let args = serde_json::json!({
+            "agent": "new-agent"
+        });
+
+        let result = handle_get_agent_status(&state, &args);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response["agent"], "new-agent");
+        assert_eq!(response["status"], "idle");
+    }
+
+    #[test]
+    fn test_get_agent_status_missing_agent() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| crate::storage::migrate(conn))
+            .expect("Failed to migrate");
+        let state = McpState::new(db);
+
+        let args = serde_json::json!({});
+
+        let result = handle_get_agent_status(&state, &args);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("agent is required"));
+    }
+
+    #[test]
+    fn test_get_agent_status_with_checkpoints() {
+        let db = crate::storage::Database::open_in_memory()
+            .expect("Failed to create in-memory database");
+        db.with_conn(|conn| -> crate::Result<()> {
+            crate::storage::migrate(conn)?;
+
+            // Insert checkpoints for agent
+            let checkpoint = crate::storage::CheckpointRecord::new(
+                "test-agent",
+                "Working on feature",
+                serde_json::json!({"progress": 50}),
+            );
+            crate::storage::insert_checkpoint(conn, &checkpoint)?;
+
+            Ok(())
+        })
+        .expect("Failed to setup");
+        let state = McpState::new(db);
+
+        let args = serde_json::json!({
+            "agent": "test-agent"
+        });
+
+        let result = handle_get_agent_status(&state, &args);
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert_eq!(response["checkpoint_count"], 1);
+    }
+
+    #[test]
+    fn test_search_checkpoints_tool_schema() {
+        let tools = get_tools();
+        let search_checkpoints = tools
+            .iter()
+            .find(|t| t.name == "search_checkpoints")
+            .expect("search_checkpoints tool should exist");
+
+        let schema = &search_checkpoints.input_schema;
+        let required = schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .expect("required field should be an array");
+
+        assert!(required.iter().any(|v| v.as_str() == Some("query")));
+        assert!(schema["properties"].get("agent").is_some());
+        assert!(schema["properties"].get("limit").is_some());
+    }
+
+    #[test]
+    fn test_get_agent_status_tool_schema() {
+        let tools = get_tools();
+        let get_agent_status = tools
+            .iter()
+            .find(|t| t.name == "get_agent_status")
+            .expect("get_agent_status tool should exist");
+
+        let schema = &get_agent_status.input_schema;
         let required = schema
             .get("required")
             .and_then(|r| r.as_array())

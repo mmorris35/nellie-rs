@@ -2575,10 +2575,10 @@ cargo test storage:: --verbose 2>&1 | grep "test result"
 - [x] 1.2.3: Implement Vector Search
 
 **Deliverables**:
-- [ ] Configure ort crate with proper features
-- [ ] Create embedding model loader
-- [ ] Handle model file location
-- [ ] Write model loading tests
+- [x] Configure ort crate with proper features
+- [x] Create embedding model loader
+- [x] Handle model file location
+- [x] Write model loading tests
 
 **Files to Create**:
 
@@ -2781,24 +2781,24 @@ cargo test embeddings:: --verbose 2>&1 | tail -20
 ```
 
 **Success Criteria**:
-- [ ] Model loading code compiles
-- [ ] Error handling for missing model works
-- [ ] Runtime availability check works
-- [ ] All embedding model tests pass
-- [ ] Commit made with message "feat(embeddings): set up ONNX runtime model loading"
+- [x] Model loading code compiles
+- [x] Error handling for missing model works
+- [x] Runtime availability check works
+- [x] All embedding model tests pass
+- [x] Commit made with message "feat(embeddings): set up ONNX runtime model loading"
 
 ---
 
 **Completion Notes**:
-- **Implementation**: (describe what was done)
+- **Implementation**: Created ONNX embedding model loader with ort crate integration. Session initialized with Level3 optimization and single intra-thread for determinism. Model paths support absolute, data_dir, and default resolution patterns. Runtime availability checked via environment initialization.
 - **Files Created**:
-  - `src/embeddings/model.rs` (X lines)
+  - `src/embeddings/model.rs` (153 lines)
 - **Files Modified**:
-  - `src/embeddings/mod.rs` (X lines)
-- **Tests**: X tests passing
-- **Build**: ✅ cargo test passes
+  - `src/embeddings/mod.rs` (22 lines, added module exports)
+- **Tests**: 3 unit tests passing (constants, error handling, runtime check)
+- **Build**: ✅ cargo test passes, clippy clean, fmt clean, release build succeeds
 - **Branch**: feature/1-3-embeddings
-- **Notes**: Full model testing requires downloading ONNX model file
+- **Notes**: Full model loading test requires actual ONNX model file in data directory
 
 ---
 

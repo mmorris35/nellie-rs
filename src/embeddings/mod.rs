@@ -5,11 +5,21 @@
 //! - Dedicated thread pool for embedding generation
 //! - Async API using channels for non-blocking operation
 
-// Submodules will be added in Phase 1
-// mod worker;
-// mod model;
+mod model;
+mod service;
+mod worker;
 
-/// Placeholder for embeddings initialization.
+pub use model::{
+    is_runtime_available, EmbeddingModel, DEFAULT_MODEL_NAME, EMBEDDING_DIM, MAX_SEQ_LENGTH,
+};
+pub use service::{placeholder_embedding, EmbeddingConfig, EmbeddingService};
+pub use worker::{load_tokenizer, EmbeddingWorker};
+
+/// Initialize embeddings module.
 pub fn init() {
-    tracing::debug!("Embeddings module initialized");
+    if is_runtime_available() {
+        tracing::info!("ONNX runtime available");
+    } else {
+        tracing::warn!("ONNX runtime not available - embeddings will be disabled");
+    }
 }

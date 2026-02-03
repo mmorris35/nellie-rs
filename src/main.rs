@@ -270,7 +270,7 @@ fn index_command(_data_dir: PathBuf, paths: Vec<PathBuf>, embedding_threads: usi
 }
 
 /// Search command: Perform semantic search
-#[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
+#[allow(clippy::needless_pass_by_value)]
 fn search_command(query: String, limit: usize, threshold: f32, server: String) -> Result<()> {
     tracing::info!(
         "Searching for: '{}' (limit={}, threshold={})",
@@ -279,27 +279,82 @@ fn search_command(query: String, limit: usize, threshold: f32, server: String) -
         threshold
     );
 
-    // TODO: Implement REST client for search
-    // This will connect to running server and fetch results
-    tracing::warn!("Search command not yet fully implemented");
-    println!("Query: {query}");
-    println!("Limit: {limit}");
-    println!("Threshold: {threshold}");
-    println!("Server: {server}");
+    // Open database directly and get statistics
+    let db = Database::open(Config::default().database_path())?;
+
+    // Initialize storage schema if needed
+    init_storage(&db)?;
+
+    let chunk_count = db.with_conn(nellie::storage::count_chunks)?;
+
+    if chunk_count == 0 {
+        println!("No indexed chunks found in database.");
+        println!("Please index code first using: nellie index <path>");
+        return Ok(());
+    }
+
+    // For semantic search, we would need embeddings. Since search requires the
+    // embedding worker (which needs async context and the server running),
+    // we direct the user to use the server's search API.
+    println!("Semantic code search for: {query}");
+    println!("  Limit: {limit}");
+    println!("  Threshold: {threshold}");
+    println!("  Server: {server}");
+    println!();
+    println!("Note: Semantic search requires the server to be running.");
+    println!("Start the server with: nellie serve");
+    println!();
+    println!("Then query it via the MCP API or REST endpoint:");
+    println!("  - MCP Tool: search_code");
+    println!("  - REST: POST {server}/api/v1/search/code");
+    println!();
+    println!("Database contains {chunk_count} indexed chunks ready for search.");
 
     Ok(())
 }
 
 /// Status command: Show server status
-#[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
-fn status_command(server: String, format: String) -> Result<()> {
-    tracing::info!("Fetching status from {server}");
+#[allow(clippy::needless_pass_by_value)]
+fn status_command(_server: String, format: String) -> Result<()> {
+    // Open database directly and get statistics
+    let db = Database::open(Config::default().database_path())?;
 
-    // TODO: Implement REST client for status
-    // This will connect to running server and fetch stats
-    tracing::warn!("Status command not yet fully implemented");
-    println!("Server: {server}");
-    println!("Format: {format}");
+    // Initialize storage schema if needed
+    init_storage(&db)?;
+
+    let chunk_count = db.with_conn(nellie::storage::count_chunks)?;
+    let lesson_count = db.with_conn(nellie::storage::count_lessons)?;
+    let file_count = db.with_conn(nellie::storage::count_tracked_files)?;
+
+    tracing::info!(
+        "Status: {} chunks, {} lessons, {} tracked files",
+        chunk_count,
+        lesson_count,
+        file_count
+    );
+
+    if format == "json" {
+        // JSON output
+        let json = serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "stats": {
+                "indexed_chunks": chunk_count,
+                "lessons": lesson_count,
+                "tracked_files": file_count
+            }
+        });
+        let json_str = serde_json::to_string_pretty(&json)
+            .map_err(|e| nellie::Error::internal(format!("JSON serialization error: {e}")))?;
+        println!("{json_str}");
+    } else {
+        // Text output (default)
+        println!("Nellie Production v{}", env!("CARGO_PKG_VERSION"));
+        println!();
+        println!("Status:");
+        println!("  Indexed chunks:  {chunk_count}");
+        println!("  Lessons:         {lesson_count}");
+        println!("  Tracked files:   {file_count}");
+    }
 
     Ok(())
 }

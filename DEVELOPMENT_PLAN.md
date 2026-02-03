@@ -123,15 +123,15 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [x] 4.2.2: Implement graceful shutdown
 - [x] 4.2.3: Tracing and observability
 
-### Phase 5: Packaging & Documentation (1 week)
+### Phase 5: Packaging & Documentation (1 week) - COMPLETE
 - [x] 5.1.1: Implement CLI interface with subcommands
 - [x] 5.1.2: Create systemd service configuration
 - [x] 5.1.3: Build cross-compilation for ARM64
-- [ ] 5.2.1: Write comprehensive README
-- [ ] 5.2.2: Create operator guide
+- [x] 5.2.1: Write comprehensive README
+- [x] 5.2.2: Create operator guide
 
-**Current Phase**: 5 (Packaging & Documentation)
-**Next Subtask**: 5.2.1
+**Current Phase**: 5 (Packaging & Documentation) - COMPLETE
+**All Phases**: COMPLETE
 
 **Completion Notes (4.1.4)**:
 - **Implementation**: Implemented comprehensive test coverage for checkpoint MCP tools (add_checkpoint and get_recent_checkpoints). Both handlers were already present from 4.1.1 setup but lacked test coverage. Added 10 new unit tests covering all parameter validation, error handling, and success cases.
@@ -231,6 +231,32 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - **Notes**: Build script successfully compiles for x86_64 target with x86-64-v2 optimization level. Checksum file properly generated and verified. Cross.toml ready for Docker-based cross-compilation. Configuration supports both standard glibc and musl C libraries for both architectures. Build script gracefully handles missing ARM64 toolchain with clear error message and installation instructions.
 
 **Task 5.1 Complete**: All 3 subtasks merged to main via squash merge (commit c4d8089). Full systemd service with security hardening, comprehensive CLI interface with subcommands, and complete cross-compilation support for x86_64 and ARM64 Linux targets. Feature branch deleted. Ready for Phase 5.2 documentation.
+
+**Completion Notes (5.2.1)**:
+- **Implementation**: Replaced simple README with comprehensive production-grade documentation covering project overview, architecture diagram, installation instructions for both prebuilt binaries and from source, complete CLI options table with environment variable mappings, embedding model configuration, full MCP and REST API documentation with examples, development setup instructions, project structure overview, testing commands, performance targets, and system requirements.
+- **Files Modified**:
+  - `README.md` (251 lines, was 77 lines - comprehensive expansion)
+- **Files Created**: None
+- **Tests**: N/A (documentation)
+- **Build**: cargo test (197 total tests pass), cargo clippy (clean, -D warnings), cargo fmt (clean), cargo build --release (success)
+- **Branch**: feature/5-2-documentation
+- **Notes**: README now provides complete getting-started guide for end users, operators, and developers. Covers installation from prebuilt binaries and from source, all configuration options with defaults and environment variable equivalents, both MCP and REST APIs with examples, development instructions, and performance targets. Ready for public documentation.
+
+**Completion Notes (5.2.2)**:
+- **Implementation**: Created comprehensive operator guide for enterprise deployment and operations. Covers all aspects of deploying, configuring, monitoring, and maintaining Nellie Production in production environments. Includes detailed procedures for backup/restore, troubleshooting, security hardening, and updates/rollback workflows.
+- **Files Created**:
+  - `docs/OPERATOR_GUIDE.md` (320 lines)
+- **Files Modified**: None
+- **Tests**: N/A (documentation)
+- **Build**: cargo test (197 total tests pass), cargo clippy (clean, -D warnings), cargo fmt (clean), cargo build --release (success)
+- **Branch**: feature/5-2-documentation
+- **Notes**: Operator guide provides enterprise operations teams with everything needed to successfully deploy and manage Nellie Production. Covers hardware requirements, installation (automated and manual), configuration tuning for large deployments, Prometheus integration, backup/restore procedures (both cold and hot backup), troubleshooting with common errors and solutions, and security best practices including reverse proxy setup and API authentication. Ready for production deployment.
+
+**Task 5.2 Complete**: Both subtasks complete. README and operator guide merged to main via squash merge. Full documentation for end users, operators, and developers.
+
+**Phase 5 Complete**: All 5 tasks merged to main. Full packaging and documentation coverage with systemd service, cross-compilation, CLI, comprehensive README, and operator guide.
+
+**DEVELOPMENT PLAN COMPLETE**: All 5 phases (0-5) merged to main with all subtasks complete. Nellie Production is ready for production deployment.
 
 ---
 

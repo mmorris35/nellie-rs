@@ -106,13 +106,13 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [x] 2.2.2: Build incremental indexing pipeline
 - [x] 2.2.3: Add file state tracking for change detection
 
-### Phase 3: Lessons & Checkpoints (1 week)
+### Phase 3: Lessons & Checkpoints (1 week) - COMPLETE
 - [x] 3.1.1: Implement lessons storage and CRUD
 - [x] 3.1.2: Add lesson search with semantic matching
 - [x] 3.1.3: Implement tag-based filtering
 - [x] 3.2.1: Implement checkpoint storage
 - [x] 3.2.2: Add agent status tracking
-- [ ] 3.2.3: Create checkpoint search functionality
+- [x] 3.2.3: Create checkpoint search functionality
 
 ### Phase 4: MCP & REST API (1 week)
 - [ ] 4.1.1: Set up rmcp server with axum transport
@@ -131,8 +131,8 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [ ] 5.2.2: Generate API documentation
 - [ ] 5.2.3: Create operator guide
 
-**Current Phase**: 3 (Lessons & Checkpoints)
-**Next Subtask**: 3.2.1
+**Current Phase**: 4 (MCP & REST API)
+**Next Subtask**: 4.1.1
 
 ---
 

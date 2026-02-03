@@ -114,14 +114,14 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [x] 3.2.2: Add agent status tracking
 - [x] 3.2.3: Create checkpoint search functionality
 
-### Phase 4: MCP & REST API (1 week)
+### Phase 4: MCP & REST API (1 week) - COMPLETE
 - [x] 4.1.1: Set up rmcp server with axum transport
 - [x] 4.1.2: Implement search_code MCP tool
 - [x] 4.1.3: Implement lessons MCP tools
 - [x] 4.1.4: Implement checkpoint MCP tools
-- [ ] 4.2.1: Create REST health and metrics endpoints
-- [ ] 4.2.2: Add Prometheus metrics collection
-- [ ] 4.2.3: Implement graceful shutdown
+- [x] 4.2.1: Create REST health and metrics endpoints
+- [x] 4.2.2: Implement graceful shutdown
+- [x] 4.2.3: Tracing and observability
 
 ### Phase 5: Packaging & Documentation (1 week)
 - [ ] 5.1.1: Create systemd service configuration
@@ -132,7 +132,7 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [ ] 5.2.3: Create operator guide
 
 **Current Phase**: 4 (MCP & REST API)
-**Next Subtask**: 4.2.1
+**Next Subtask**: 4.2.3
 
 **Completion Notes (4.1.4)**:
 - **Implementation**: Implemented comprehensive test coverage for checkpoint MCP tools (add_checkpoint and get_recent_checkpoints). Both handlers were already present from 4.1.1 setup but lacked test coverage. Added 10 new unit tests covering all parameter validation, error handling, and success cases.
@@ -147,6 +147,45 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - **Notes**: Checkpoint tools are fully tested with comprehensive parameter validation. add_checkpoint requires agent, working_on, and state parameters. get_recent_checkpoints requires agent parameter and defaults limit to 5. Both tools properly integrate with storage layer functions.
 
 **Task 4.1 Complete**: All 4 subtasks merged to main. Complete MCP server with 6 tools fully implemented and tested (search_code, search_lessons, add_lesson, add_checkpoint, get_recent_checkpoints, get_status).
+
+**Completion Notes (4.2.1)**:
+- **Implementation**: Created REST API scaffold with health check, metrics, and status endpoints. Implemented `/health` endpoint returning database status, `/metrics` endpoint serving Prometheus metrics, and `/api/v1/status` endpoint returning indexed statistics. Added comprehensive metrics definitions with Prometheus gauges, counters, and histograms for observability.
+- **Files Created**:
+  - `src/server/rest.rs` (174 lines)
+  - `src/server/metrics.rs` (81 lines)
+- **Files Modified**:
+  - `src/server/mod.rs` (added rest and metrics modules, updated exports)
+- **Tests**: 3 new REST endpoint tests (test_health_check, test_metrics, test_status) + 1 metrics init test = 4 new tests. All 180 total tests passing.
+- **Build**: cargo test (180 total tests pass), cargo clippy (clean, fixed redundant closures), cargo fmt (clean), cargo build --release (success)
+- **Branch**: feature/4-2-rest-api
+- **Notes**: REST API scaffold complete with axum router setup, CORS support ready, metrics integration with prometheus crate working. Health check uses database.health_check() for liveness. Status endpoint retrieves chunk, lesson, and file counts from storage layer.
+
+**Completion Notes (4.2.2)**:
+- **Implementation**: Implemented graceful shutdown with signal handlers (SIGTERM, SIGINT). Created App server struct that coordinates all components, builds router with MCP and REST endpoints, and handles graceful shutdown with signal listening. Server now properly initializes database, metrics, and starts listening on configured address. Ctrl+C and SIGTERM both trigger coordinated shutdown sequence with proper logging.
+- **Files Created**:
+  - `src/server/app.rs` (177 lines)
+- **Files Modified**:
+  - `src/server/mod.rs` (added app module, updated exports to include App and ServerConfig)
+  - `src/main.rs` (converted to async, integrated with App server, database initialization, and metrics)
+- **Tests**: 4 new unit tests in app.rs (test_server_config_default, test_server_config_custom, test_app_creation, test_app_router). All 184 total tests passing.
+- **Build**: cargo test (184 total tests pass), cargo clippy (clean, fixed ignored_unit_patterns for tokio::select!), cargo fmt (clean), cargo build --release (success)
+- **Branch**: feature/4-2-rest-api
+- **Notes**: Server fully functional - tested startup and shutdown with successful health check response. Signal handlers work on Unix systems (SIGTERM) and all platforms (SIGINT/Ctrl+C). App struct properly orchestrates MCP router, REST router, and graceful shutdown using tokio::select!. Database and metrics are initialized before server startup.
+
+**Completion Notes (4.2.3)**:
+- **Implementation**: Implemented structured logging and request tracing observability. Created new observability module with configurable tracing setup supporting both plain text and JSON output formats. Added span propagation for request tracking with HTTP method, URI, and request ID in spans. Enhanced all endpoint handlers with structured logging using tracing macros. Integrated request tracing middleware (TraceLayer) with make_span_with closure to capture request context and on_response callback to log completion. CLI now supports NELLIE_LOG_JSON environment variable for JSON logging output.
+- **Files Created**:
+  - `src/server/observability.rs` (175 lines) - Tracing configuration, init_tracing function, span utilities
+- **Files Modified**:
+  - `src/server/mod.rs` (added observability module, updated exports)
+  - `src/server/app.rs` (enhanced TraceLayer with custom span creation and response logging)
+  - `src/server/rest.rs` (added structured logging to health, metrics, and status endpoints)
+  - `src/server/mcp.rs` (added tracing spans for tool invocations with debug/warn logging)
+  - `src/main.rs` (integrated init_tracing with CLI flags, added NELLIE_LOG_JSON support)
+- **Tests**: 5 new unit tests in observability.rs (test_tracing_config_default, test_tracing_config_custom, test_span_creation, test_tool_span, test_db_span). All 189 total tests passing.
+- **Build**: cargo test (189 total tests pass), cargo clippy (clean, -D warnings), cargo fmt (clean), cargo build --release (success)
+- **Branch**: feature/4-2-rest-api
+- **Notes**: Structured logging fully operational. Tested server startup with both plain text logging (default) and JSON logging (NELLIE_LOG_JSON=true). All spans properly propagate request context including method, URI, and request_id headers. TraceLayer captures HTTP request lifecycle with status codes logged on response. Both SIGTERM and Ctrl+C properly shutdown with graceful logging. Ready for Task 4.2 merge.
 
 ---
 

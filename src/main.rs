@@ -7,8 +7,9 @@
 #![allow(clippy::module_name_repetitions)]
 
 use clap::Parser;
+use nellie::server::{init_metrics, init_tracing, App, ServerConfig};
+use nellie::storage::{init_storage, Database};
 use nellie::{Config, Result};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Nellie Production - Semantic code memory system
 #[derive(Parser, Debug)]
@@ -31,7 +32,11 @@ struct Cli {
     #[arg(long, env = "NELLIE_LOG_LEVEL", default_value = "info")]
     log_level: String,
 
-    /// Directories to watch for code changes (can be specified multiple times)
+    /// Enable JSON logging output
+    #[arg(long, env = "NELLIE_LOG_JSON")]
+    log_json: bool,
+
+    /// Directories to watch for code changes
     #[arg(short, long, env = "NELLIE_WATCH_DIRS", value_delimiter = ',')]
     watch: Vec<std::path::PathBuf>,
 
@@ -40,17 +45,12 @@ struct Cli {
     embedding_threads: usize,
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize tracing
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&cli.log_level));
-
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    // Initialize tracing with configuration
+    init_tracing(&cli.log_level, cli.log_json);
 
     tracing::info!(
         "Nellie Production v{} starting...",
@@ -79,8 +79,20 @@ fn main() -> Result<()> {
         config.data_dir
     );
 
-    // TODO: Start server in Phase 4
-    tracing::info!("Server startup not yet implemented - exiting");
+    // Initialize database
+    let db = Database::open(config.database_path())?;
+    init_storage(&db)?;
 
-    Ok(())
+    // Initialize metrics
+    init_metrics();
+
+    // Create and run server
+    let server_config = ServerConfig {
+        host: config.host,
+        port: config.port,
+        ..Default::default()
+    };
+
+    let app = App::new(server_config, db);
+    app.run().await
 }

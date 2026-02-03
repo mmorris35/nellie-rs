@@ -209,6 +209,15 @@ async fn invoke_tool(
     State(state): State<Arc<McpState>>,
     Json(request): Json<ToolRequest>,
 ) -> Json<ToolResponse> {
+    let tool_name = request.name.clone();
+    let span = tracing::info_span!(
+        "tool_invocation",
+        tool = %tool_name,
+    );
+    let _guard = span.enter();
+
+    tracing::debug!("Invoking tool: {}", tool_name);
+
     let result = match request.name.as_str() {
         "search_code" => handle_search_code(&state, &request.arguments),
         "search_lessons" => handle_search_lessons(&state, &request.arguments),
@@ -220,14 +229,20 @@ async fn invoke_tool(
     };
 
     match result {
-        Ok(content) => Json(ToolResponse {
-            content,
-            error: None,
-        }),
-        Err(e) => Json(ToolResponse {
-            content: serde_json::Value::Null,
-            error: Some(e),
-        }),
+        Ok(content) => {
+            tracing::debug!("Tool invocation succeeded");
+            Json(ToolResponse {
+                content,
+                error: None,
+            })
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Tool invocation failed");
+            Json(ToolResponse {
+                content: serde_json::Value::Null,
+                error: Some(e),
+            })
+        }
     }
 }
 

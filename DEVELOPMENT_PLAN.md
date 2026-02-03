@@ -110,8 +110,8 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [x] 3.1.1: Implement lessons storage and CRUD
 - [x] 3.1.2: Add lesson search with semantic matching
 - [x] 3.1.3: Implement tag-based filtering
-- [ ] 3.2.1: Implement checkpoint storage
-- [ ] 3.2.2: Add agent status tracking
+- [x] 3.2.1: Implement checkpoint storage
+- [x] 3.2.2: Add agent status tracking
 - [ ] 3.2.3: Create checkpoint search functionality
 
 ### Phase 4: MCP & REST API (1 week)

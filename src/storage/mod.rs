@@ -4,8 +4,12 @@
 //! - Code chunks with embeddings
 //! - Lessons learned
 //! - Agent checkpoints
+//! - Agent status tracking
 //! - File state for incremental indexing
 
+mod agent_status;
+mod checkpoints;
+mod checkpoints_search;
 mod chunks;
 mod connection;
 mod file_state;
@@ -16,6 +20,20 @@ mod schema;
 mod search;
 mod vector;
 
+pub use agent_status::{
+    cleanup_stale_statuses, count_agents_in_progress, get_agent_status, get_agents_in_progress,
+    get_all_agent_statuses, has_in_progress_work, mark_idle, mark_in_progress, AgentStatus,
+    AgentStatusInfo,
+};
+pub use checkpoints::{
+    cleanup_old_checkpoints, count_checkpoints, delete_checkpoint, get_checkpoint,
+    get_checkpoints_since, get_latest_checkpoint, get_recent_checkpoints, insert_checkpoint,
+};
+pub use checkpoints_search::{
+    init_checkpoint_vectors, search_checkpoints_by_agent, search_checkpoints_by_agent_and_repo,
+    search_checkpoints_by_embedding, search_checkpoints_by_repo, search_checkpoints_by_session,
+    search_checkpoints_by_text, store_checkpoint_embedding,
+};
 pub use chunks::{
     count_chunks, count_chunks_for_file, delete_chunk, delete_chunks_by_file, get_chunk,
     get_chunks_by_file, init_chunk_vectors, insert_chunk, insert_chunks_batch,

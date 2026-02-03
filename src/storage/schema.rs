@@ -144,6 +144,17 @@ fn migrate_v1(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_file_state_mtime ON file_state(mtime);
 
+        -- Agent status tracking
+        CREATE TABLE IF NOT EXISTS agent_status (
+            agent TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            current_task TEXT,
+            last_updated INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_agent_status_status ON agent_status(status);
+        CREATE INDEX IF NOT EXISTS idx_agent_status_last_updated ON agent_status(last_updated);
+
         -- Watch directories configuration
         CREATE TABLE IF NOT EXISTS watch_dirs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -172,6 +183,7 @@ pub fn verify_schema(conn: &Connection) -> Result<()> {
         "lessons",
         "checkpoints",
         "file_state",
+        "agent_status",
         "watch_dirs",
     ];
 

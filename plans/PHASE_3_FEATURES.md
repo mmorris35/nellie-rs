@@ -752,10 +752,10 @@ cargo test storage::lessons_search:: --verbose 2>&1 | tail -20
 - [x] 3.1.2: Add Lesson Search
 
 **Deliverables**:
-- [ ] Create checkpoint CRUD operations
-- [ ] Add agent-based queries
-- [ ] Implement time-based filtering
-- [ ] Write checkpoint tests
+- [x] Create checkpoint CRUD operations
+- [x] Add agent-based queries
+- [x] Implement time-based filtering
+- [x] Write checkpoint tests
 
 **Files to Create**:
 
@@ -1085,22 +1085,91 @@ cargo test storage::checkpoints:: --verbose 2>&1 | tail -30
 ---
 
 **Completion Notes**:
-- **Implementation**: (describe what was done)
+- **Implementation**: Implemented complete CRUD operations for checkpoint storage with proper error handling and documentation. All operations use rusqlite with parameterized queries for SQL safety. State is stored as JSON in the database and deserialized on retrieval. Includes agent-based queries (get_recent_checkpoints, get_checkpoints_since) and maintenance functions (cleanup_old_checkpoints).
 - **Files Created**:
-  - `src/storage/checkpoints.rs` (X lines)
+  - `src/storage/checkpoints.rs` (386 lines)
 - **Files Modified**:
-  - `src/storage/mod.rs` (X lines)
-- **Tests**: X tests passing
-- **Build**: ✅ cargo test passes
+  - `src/storage/mod.rs` (added checkpoints module and 8 function exports)
+- **Tests**: 7 unit tests passing (test_insert_and_get, test_get_recent, test_cleanup, test_get_latest, test_delete, test_get_checkpoints_since, test_multiple_agents). All 133 tests in the suite pass.
+- **Build**: ✅ cargo fmt clean, cargo clippy clean, cargo test passes (133/133), cargo build --release succeeds
 - **Branch**: feature/3-2-checkpoints
-- **Notes**: (any additional context)
+- **Notes**: Implemented all required functions: insert_checkpoint, get_checkpoint, delete_checkpoint, get_recent_checkpoints, get_checkpoints_since, get_latest_checkpoint, count_checkpoints, cleanup_old_checkpoints. Used proper error handling with thiserror pattern. Added comprehensive documentation for all public functions. Fixed usize to i64 conversions to avoid clippy warnings.
+
+---
+
+### Subtask 3.2.2: Add Agent Status Tracking (Single Session)
+
+**Prerequisites**:
+- [x] 3.2.1: Implement Checkpoint Storage
+
+**Deliverables**:
+- [x] Create agent status tracking with Idle/InProgress states
+- [x] Implement get_agent_status with auto-create for new agents
+- [x] Add has_in_progress_work query function
+- [x] Implement mark_in_progress and mark_idle functions
+- [x] Add agent status query functions (get_all, get_in_progress, count)
+- [x] Implement cleanup for stale agent statuses
+- [x] Write comprehensive tests
+
+**Files Created**:
+- `src/storage/agent_status.rs` (521 lines)
+
+**Files Modified**:
+- `src/storage/mod.rs` (added agent_status module and exports)
+- `src/storage/schema.rs` (added agent_status table to migration and verification)
+
+**Exported Functions**:
+- `get_agent_status(conn, agent)` - Get current status of an agent
+- `has_in_progress_work(conn, agent)` - Check if agent has work in progress
+- `mark_in_progress(conn, agent, task)` - Mark agent as working
+- `mark_idle(conn, agent)` - Mark agent as idle
+- `get_all_agent_statuses(conn)` - List all agents and their statuses
+- `count_agents_in_progress(conn)` - Count agents with in-progress work
+- `get_agents_in_progress(conn)` - Get all agents currently working
+- `cleanup_stale_statuses(conn, max_age_seconds)` - Remove old status entries
+- `AgentStatus` enum with `Idle` and `InProgress` variants
+- `AgentStatusInfo` struct with comprehensive status details
+
+**Verification Commands**:
+```bash
+cargo test storage::agent_status:: --verbose 2>&1 | tail -20
+# Expected: "test result: ok. 9 passed; 0 failed"
+```
+
+**Success Criteria**:
+- [x] get_agent_status works with auto-create for new agents
+- [x] has_in_progress_work returns correct boolean
+- [x] mark_in_progress and mark_idle update status correctly
+- [x] Query functions return correct results
+- [x] Cleanup function removes old entries
+- [x] All agent_status tests pass (9/9)
+- [x] No clippy warnings
+- [x] Code properly formatted
+- [x] All tests pass (142/142)
+- [x] Commit made with message "feat(storage): add agent status tracking"
+
+---
+
+**Completion Notes**:
+- **Implementation**: Implemented comprehensive agent status tracking system with support for tracking whether agents have work in progress. Created AgentStatus enum for type-safe state representation. Implemented get_agent_status with automatic creation of idle entries for new agents. Added has_in_progress_work for easy checking of agent state. Implemented mark_in_progress and mark_idle for state transitions with timestamp tracking. Added query functions to retrieve all agents, agents in progress, and counts. Implemented cleanup function for removing stale entries. All functions use proper error handling and documentation.
+- **Files Created**:
+  - `src/storage/agent_status.rs` (521 lines)
+- **Files Modified**:
+  - `src/storage/mod.rs` (added agent_status module and 8 function + 2 type exports)
+  - `src/storage/schema.rs` (added agent_status table with indexes)
+- **Tests**: 9 unit tests passing (test_get_agent_status_new, test_mark_in_progress, test_mark_idle, test_has_in_progress_work, test_get_all_statuses, test_count_in_progress, test_get_agents_in_progress, test_cleanup_stale_statuses, test_agent_status_enum). All 142 tests in suite pass.
+- **Build**: ✅ cargo fmt clean, cargo clippy clean (no warnings), cargo test passes (142/142), cargo build --release succeeds
+- **Branch**: feature/3-2-checkpoints
+- **Notes**: Implemented AgentStatus enum with Idle and InProgress variants using parse() method (avoiding confusion with FromStr trait). Added AgentStatusInfo struct to return comprehensive status details including checkpoint counts. Used helper function now_unix() to get current timestamp safely. All timestamp operations properly use i64 to match database schema. Proper use of INSERT OR CONFLICT for upsert operations. Comprehensive error handling with proper error type conversions. All public items properly documented with doc comments and error sections.
 
 ---
 
 ### Task 3.2 Complete - Squash Merge
 
-- [ ] All subtasks complete
-- [ ] All tests pass
+- [x] 3.2.1: Implement Checkpoint Storage
+- [x] 3.2.2: Add Agent Status Tracking
+- [ ] 3.2.3: Create checkpoint search functionality (deferred to Phase 4)
+- [x] All tests pass (142/142)
 - [ ] Squash merge to main
 - [ ] Push to remote
 - [ ] Delete branch

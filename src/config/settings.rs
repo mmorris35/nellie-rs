@@ -23,6 +23,9 @@ pub struct Config {
 
     /// Maximum number of embedding worker threads.
     pub embedding_threads: usize,
+
+    /// API key for authentication. If None, authentication is disabled (dev mode).
+    pub api_key: Option<String>,
 }
 
 impl Default for Config {
@@ -36,6 +39,7 @@ impl Default for Config {
             embedding_threads: std::thread::available_parallelism()
                 .map(|n| n.get().min(4))
                 .unwrap_or(4),
+            api_key: std::env::var("NELLIE_API_KEY").ok(),
         }
     }
 }
@@ -226,5 +230,25 @@ mod tests {
                 "Level '{level}' should be valid (case insensitive)"
             );
         }
+    }
+
+    #[test]
+    fn test_config_with_api_key() {
+        let config = Config {
+            api_key: Some("secret-key".to_string()),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+        assert_eq!(config.api_key, Some("secret-key".to_string()));
+    }
+
+    #[test]
+    fn test_config_without_api_key() {
+        let config = Config {
+            api_key: None,
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+        assert_eq!(config.api_key, None);
     }
 }

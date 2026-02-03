@@ -40,6 +40,10 @@ struct Cli {
     #[arg(long, env = "NELLIE_LOG_JSON", global = true)]
     log_json: bool,
 
+    /// API key for authentication (required for production use)
+    #[arg(long, env = "NELLIE_API_KEY", global = true)]
+    api_key: Option<String>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -147,6 +151,7 @@ async fn main() -> Result<()> {
                 watch,
                 embedding_threads,
                 cli.log_level,
+                cli.api_key,
             )
             .await
         }
@@ -171,6 +176,7 @@ async fn main() -> Result<()> {
                 vec![],
                 4,
                 cli.log_level,
+                cli.api_key,
             )
             .await
         }
@@ -185,6 +191,7 @@ async fn serve_command(
     watch: Vec<PathBuf>,
     embedding_threads: usize,
     log_level: String,
+    api_key: Option<String>,
 ) -> Result<()> {
     tracing::info!("Starting Nellie server...");
 
@@ -196,6 +203,7 @@ async fn serve_command(
         log_level,
         watch_dirs: watch.clone(),
         embedding_threads,
+        api_key: api_key.clone(),
     };
 
     tracing::debug!(?config, "Configuration loaded");
@@ -209,6 +217,14 @@ async fn serve_command(
         port,
         config.data_dir
     );
+
+    if api_key.is_some() {
+        tracing::info!("API key authentication enabled");
+    } else {
+        tracing::warn!(
+            "API key authentication DISABLED - server is accessible without credentials!"
+        );
+    }
 
     if !watch.is_empty() {
         tracing::info!("Watching directories: {:?}", watch);
@@ -225,6 +241,7 @@ async fn serve_command(
     let server_config = ServerConfig {
         host,
         port,
+        api_key,
         ..Default::default()
     };
 

@@ -7,11 +7,18 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::Router;
+use axum::{
+    extract::Request,
+    http::StatusCode,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    Router,
+};
 use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
+use super::auth::ApiKeyConfig;
 use super::mcp::{create_mcp_router, McpState};
 use super::rest::create_rest_router;
 use crate::storage::Database;
@@ -26,6 +33,8 @@ pub struct ServerConfig {
     pub port: u16,
     /// Shutdown timeout duration
     pub shutdown_timeout: Duration,
+    /// API key for authentication (None = disabled)
+    pub api_key: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -34,6 +43,7 @@ impl Default for ServerConfig {
             host: "127.0.0.1".to_string(),
             port: 8080,
             shutdown_timeout: Duration::from_secs(30),
+            api_key: None,
         }
     }
 }
@@ -57,8 +67,13 @@ impl App {
     /// New application instance
     #[must_use]
     pub fn new(config: ServerConfig, db: Database) -> Self {
-        let state = Arc::new(McpState::new(db));
+        let state = Arc::new(McpState::with_api_key(db, config.api_key.clone()));
         Self { config, state }
+    }
+
+    /// Get the API key configuration for this app.
+    fn api_key_config(&self) -> Arc<ApiKeyConfig> {
+        Arc::new(ApiKeyConfig::new(self.config.api_key.clone()))
     }
 
     /// Build the router with all endpoints.
@@ -68,9 +83,12 @@ impl App {
             .allow_methods(Any)
             .allow_headers(Any);
 
+        let api_key_config = self.api_key_config();
+
         Router::new()
             .merge(create_mcp_router(Arc::clone(&self.state)))
             .merge(create_rest_router(Arc::clone(&self.state)))
+            .layer(middleware::from_fn(auth_middleware_wrapper(api_key_config)))
             .layer(
                 TraceLayer::new_for_http()
                     .make_span_with(|request: &axum::http::Request<_>| {
@@ -136,6 +154,73 @@ impl App {
     }
 }
 
+/// Create an authentication middleware function.
+fn auth_middleware_wrapper(
+    config: Arc<ApiKeyConfig>,
+) -> impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>>
+       + Clone
+       + Send
+       + 'static {
+    move |request: Request, next: Next| {
+        let config = Arc::clone(&config);
+        Box::pin(async move {
+            // Allow /health endpoint without authentication (needed for load balancers)
+            if request.uri().path() == "/health" {
+                return next.run(request).await;
+            }
+
+            // If authentication is disabled, allow the request
+            if !config.is_enabled() {
+                return next.run(request).await;
+            }
+
+            // Extract API key from headers
+            let api_key = extract_api_key_from_headers(request.headers());
+
+            // Validate the key
+            if let Some(key) = api_key {
+                if config.validate(&key) {
+                    return next.run(request).await;
+                }
+            }
+
+            // Authentication failed
+            tracing::warn!(
+                path = %request.uri(),
+                method = %request.method(),
+                "Authentication failed - invalid or missing API key"
+            );
+
+            (
+                StatusCode::UNAUTHORIZED,
+                "Unauthorized - invalid or missing API key",
+            )
+                .into_response()
+        })
+    }
+}
+
+/// Extract API key from request headers.
+fn extract_api_key_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
+    // Check Authorization header (Bearer scheme)
+    if let Some(auth_header) = headers.get("authorization") {
+        if let Ok(auth_str) = auth_header.to_str() {
+            if let Some(key) = auth_str.strip_prefix("Bearer ") {
+                return Some(key.to_string());
+            }
+        }
+    }
+
+    // Check X-API-Key header
+    if let Some(key_header) = headers.get("x-api-key") {
+        if let Ok(key_str) = key_header.to_str() {
+            return Some(key_str.to_string());
+        }
+    }
+
+    None
+}
+
 /// Wait for shutdown signal (SIGTERM or Ctrl+C).
 ///
 /// This function will block until one of the following signals is received:
@@ -176,6 +261,9 @@ async fn shutdown_signal() {
 mod tests {
     use super::*;
     use crate::storage::migrate;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
 
     #[test]
     fn test_server_config_default() {
@@ -183,6 +271,7 @@ mod tests {
         assert_eq!(config.host, "127.0.0.1");
         assert_eq!(config.port, 8080);
         assert_eq!(config.shutdown_timeout, Duration::from_secs(30));
+        assert_eq!(config.api_key, None);
     }
 
     #[test]
@@ -191,10 +280,12 @@ mod tests {
             host: "0.0.0.0".to_string(),
             port: 9000,
             shutdown_timeout: Duration::from_secs(60),
+            api_key: Some("test-key".to_string()),
         };
         assert_eq!(config.host, "0.0.0.0");
         assert_eq!(config.port, 9000);
         assert_eq!(config.shutdown_timeout, Duration::from_secs(60));
+        assert_eq!(config.api_key, Some("test-key".to_string()));
     }
 
     #[test]
@@ -218,5 +309,152 @@ mod tests {
         let _router = app.router();
         // Router created successfully
         assert!(true);
+    }
+
+    #[tokio::test]
+    async fn test_health_without_auth() {
+        let config = ServerConfig::default();
+        let db = Database::open_in_memory().unwrap();
+        db.with_conn(|conn| migrate(conn)).unwrap();
+
+        let app = App::new(config, db);
+        let router = app.router();
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_without_api_key_auth_disabled() {
+        let config = ServerConfig::default();
+        let db = Database::open_in_memory().unwrap();
+        db.with_conn(|conn| migrate(conn)).unwrap();
+
+        let app = App::new(config, db);
+        let router = app.router();
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_without_api_key_auth_enabled() {
+        let config = ServerConfig {
+            api_key: Some("secret-key".to_string()),
+            ..Default::default()
+        };
+        let db = Database::open_in_memory().unwrap();
+        db.with_conn(|conn| migrate(conn)).unwrap();
+
+        let app = App::new(config, db);
+        let router = app.router();
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_with_wrong_api_key() {
+        let config = ServerConfig {
+            api_key: Some("secret-key".to_string()),
+            ..Default::default()
+        };
+        let db = Database::open_in_memory().unwrap();
+        db.with_conn(|conn| migrate(conn)).unwrap();
+
+        let app = App::new(config, db);
+        let router = app.router();
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header("x-api-key", "wrong-key")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_with_correct_api_key_header() {
+        let config = ServerConfig {
+            api_key: Some("secret-key".to_string()),
+            ..Default::default()
+        };
+        let db = Database::open_in_memory().unwrap();
+        db.with_conn(|conn| migrate(conn)).unwrap();
+
+        let app = App::new(config, db);
+        let router = app.router();
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header("x-api-key", "secret-key")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_with_correct_bearer_token() {
+        let config = ServerConfig {
+            api_key: Some("secret-key".to_string()),
+            ..Default::default()
+        };
+        let db = Database::open_in_memory().unwrap();
+        db.with_conn(|conn| migrate(conn)).unwrap();
+
+        let app = App::new(config, db);
+        let router = app.router();
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header("authorization", "Bearer secret-key")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

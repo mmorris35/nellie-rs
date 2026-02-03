@@ -16,6 +16,8 @@ use crate::storage::Database;
 pub struct McpState {
     pub db: Database,
     pub embeddings: Option<EmbeddingService>,
+    /// API key for authentication (None = disabled)
+    api_key: Option<String>,
 }
 
 impl McpState {
@@ -25,6 +27,7 @@ impl McpState {
         Self {
             db,
             embeddings: None,
+            api_key: None,
         }
     }
 
@@ -35,7 +38,47 @@ impl McpState {
         Self {
             db,
             embeddings: Some(embeddings),
+            api_key: None,
         }
+    }
+
+    /// Create MCP state with API key.
+    #[must_use]
+    pub const fn with_api_key(db: Database, api_key: Option<String>) -> Self {
+        Self {
+            db,
+            embeddings: None,
+            api_key,
+        }
+    }
+
+    /// Create MCP state with embeddings and API key.
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // EmbeddingService is not const
+    pub fn with_embeddings_and_api_key(
+        db: Database,
+        embeddings: EmbeddingService,
+        api_key: Option<String>,
+    ) -> Self {
+        Self {
+            db,
+            embeddings: Some(embeddings),
+            api_key,
+        }
+    }
+
+    /// Check if API key authentication is configured.
+    #[must_use]
+    pub const fn api_key_configured(&self) -> bool {
+        self.api_key.is_some()
+    }
+
+    /// Validate an API key.
+    #[must_use]
+    pub fn validate_api_key(&self, provided_key: &str) -> bool {
+        self.api_key
+            .as_ref()
+            .is_some_and(|expected| expected == provided_key)
     }
 }
 

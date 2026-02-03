@@ -58,7 +58,7 @@ async fn health_check(State(state): State<Arc<McpState>>) -> impl IntoResponse {
 }
 
 /// Prometheus metrics endpoint.
-async fn metrics() -> impl IntoResponse {
+async fn metrics(State(_state): State<Arc<McpState>>) -> impl IntoResponse {
     let encoder = TextEncoder::new();
     let metric_families = prometheus::gather();
 

@@ -22,7 +22,7 @@ jobs:
             target: aarch64-unknown-linux-gnu
             artifact: nellie-linux-aarch64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -59,7 +59,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download artifacts
         uses: actions/download-artifact@v4

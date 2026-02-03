@@ -6,14 +6,35 @@
 //! - Agent checkpoints
 //! - File state for incremental indexing
 
-// Submodules will be added in Phase 1
-// mod schema;
-// mod queries;
-// mod chunks;
-// mod lessons;
-// mod checkpoints;
+mod connection;
+mod schema;
+mod vector;
 
-/// Placeholder for storage initialization.
-pub fn init() {
-    tracing::debug!("Storage module initialized");
+pub use connection::Database;
+pub use schema::{migrate, verify_schema, SCHEMA_VERSION};
+pub use vector::{
+    create_vec_table, delete_vector, insert_vector, load_extension, search_similar, EMBEDDING_DIM,
+};
+
+/// Initialize storage with migrations.
+///
+/// # Errors
+///
+/// Returns an error if database initialization fails.
+pub fn init_storage(db: &Database) -> crate::Result<()> {
+    db.with_conn(|conn| {
+        // Load sqlite-vec extension (optional - may not be available)
+        if let Err(e) = load_extension(conn) {
+            tracing::warn!("sqlite-vec extension not available: {e}");
+        }
+
+        // Run migrations
+        migrate(conn)?;
+
+        // Verify schema
+        verify_schema(conn)?;
+
+        tracing::info!("Storage initialized, schema version {SCHEMA_VERSION}");
+        Ok(())
+    })
 }

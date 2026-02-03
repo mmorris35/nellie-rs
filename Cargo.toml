@@ -24,6 +24,7 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled", "blob"] }
+sqlite-vec = "0.1"
 
 # Embeddings (ONNX Runtime)
 ort = { version = "2.0.0-rc.11", default-features = false, features = ["load-dynamic"] }

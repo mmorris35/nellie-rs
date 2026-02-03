@@ -91,8 +91,8 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [x] 1.1.1: Set up SQLite with rusqlite
 - [x] 1.1.2: Integrate sqlite-vec extension
 - [x] 1.1.3: Implement schema migrations
-- [ ] 1.2.1: Define storage traits and models
-- [ ] 1.2.2: Implement chunk storage operations
+- [x] 1.2.1: Define storage traits and models
+- [x] 1.2.2: Implement chunk storage operations
 - [ ] 1.2.3: Implement vector search
 - [ ] 1.3.1: Set up ONNX Runtime with ort crate
 - [ ] 1.3.2: Implement embedding worker with thread pool

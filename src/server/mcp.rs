@@ -353,16 +353,16 @@ async fn invoke_tool(
     tracing::debug!("Invoking tool: {}", tool_name);
 
     let result = match request.name.as_str() {
-        "search_code" => handle_search_code(&state, &request.arguments),
-        "search_lessons" => handle_search_lessons(&state, &request.arguments),
+        "search_code" => handle_search_code(&state, &request.arguments).await,
+        "search_lessons" => handle_search_lessons(&state, &request.arguments).await,
         "list_lessons" => handle_list_lessons(&state, &request.arguments),
-        "add_lesson" => handle_add_lesson(&state, &request.arguments),
+        "add_lesson" => handle_add_lesson(&state, &request.arguments).await,
         "delete_lesson" => handle_delete_lesson(&state, &request.arguments),
-        "add_checkpoint" => handle_add_checkpoint(&state, &request.arguments),
+        "add_checkpoint" => handle_add_checkpoint(&state, &request.arguments).await,
         "get_recent_checkpoints" => handle_get_checkpoints(&state, &request.arguments),
         "trigger_reindex" => handle_trigger_reindex(&state, &request.arguments),
         "get_status" => handle_get_status(&state),
-        "search_checkpoints" => handle_search_checkpoints(&state, &request.arguments),
+        "search_checkpoints" => handle_search_checkpoints(&state, &request.arguments).await,
         "get_agent_status" => handle_get_agent_status(&state, &request.arguments),
         _ => Err(format!("Unknown tool: {}", request.name)),
     };
@@ -388,7 +388,7 @@ async fn invoke_tool(
 // Tool handlers
 
 #[allow(clippy::cast_possible_truncation)]
-fn handle_search_code(
+async fn handle_search_code(
     state: &McpState,
     args: &serde_json::Value,
 ) -> std::result::Result<serde_json::Value, String> {
@@ -413,13 +413,8 @@ fn handle_search_code(
     let embeddings = embeddings.clone();
     let query_text = query.to_string();
 
-    let embedding = if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle
-            .block_on(async { embeddings.embed_one(query_text).await })
-            .map_err(|e| format!("Failed to generate query embedding: {e}"))?
-    } else {
-        return Err("No tokio runtime available for embedding generation".to_string());
-    };
+    let embedding = embeddings.embed_one(query_text).await
+        .map_err(|e| format!("Failed to generate query embedding: {e}"))?;
 
     // Create search options
     let mut search_opts = crate::storage::SearchOptions::new(limit);
@@ -459,7 +454,7 @@ fn handle_search_code(
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn handle_search_lessons(
+async fn handle_search_lessons(
     state: &McpState,
     args: &serde_json::Value,
 ) -> std::result::Result<serde_json::Value, String> {
@@ -482,13 +477,8 @@ fn handle_search_lessons(
     let embeddings = embeddings.clone();
     let query_text = query.to_string();
 
-    let embedding = if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle
-            .block_on(async { embeddings.embed_one(query_text).await })
-            .map_err(|e| format!("Failed to generate query embedding: {e}"))?
-    } else {
-        return Err("No tokio runtime available for embedding generation".to_string());
-    };
+    let embedding = embeddings.embed_one(query_text).await
+        .map_err(|e| format!("Failed to generate query embedding: {e}"))?;
 
     // Search lessons using vector similarity
     let lessons = state
@@ -530,7 +520,7 @@ fn handle_list_lessons(
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn handle_add_lesson(
+async fn handle_add_lesson(
     state: &McpState,
     args: &serde_json::Value,
 ) -> std::result::Result<serde_json::Value, String> {
@@ -558,15 +548,11 @@ fn handle_add_lesson(
             // Combine title and content for better semantic understanding
             let text_to_embed = format!("{}\n{}", lesson.title, lesson.content);
 
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                if let Ok(embedding) =
-                    handle.block_on(async { embeddings.embed_one(text_to_embed).await })
-                {
-                    // Store embedding in vector table (ignore errors, embedding is optional for backward compat)
-                    let _ = state.db.with_conn(|conn| {
-                        crate::storage::store_lesson_embedding(conn, &lesson.id, &embedding)
-                    });
-                }
+            if let Ok(embedding) = embeddings.embed_one(text_to_embed).await {
+                // Store embedding in vector table (ignore errors, embedding is optional for backward compat)
+                let _ = state.db.with_conn(|conn| {
+                    crate::storage::store_lesson_embedding(conn, &lesson.id, &embedding)
+                });
             }
         }
     }
@@ -596,7 +582,7 @@ fn handle_delete_lesson(
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn handle_add_checkpoint(
+async fn handle_add_checkpoint(
     state: &McpState,
     args: &serde_json::Value,
 ) -> std::result::Result<serde_json::Value, String> {
@@ -621,15 +607,11 @@ fn handle_add_checkpoint(
             // Embed the working_on description for checkpoint semantic search
             let text_to_embed = checkpoint.working_on.clone();
 
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                if let Ok(embedding) =
-                    handle.block_on(async { embeddings.embed_one(text_to_embed).await })
-                {
-                    // Store embedding in vector table (ignore errors, embedding is optional for backward compat)
-                    let _ = state.db.with_conn(|conn| {
-                        crate::storage::store_checkpoint_embedding(conn, &checkpoint.id, &embedding)
-                    });
-                }
+            if let Ok(embedding) = embeddings.embed_one(text_to_embed).await {
+                // Store embedding in vector table (ignore errors, embedding is optional for backward compat)
+                let _ = state.db.with_conn(|conn| {
+                    crate::storage::store_checkpoint_embedding(conn, &checkpoint.id, &embedding)
+                });
             }
         }
     }
@@ -734,7 +716,7 @@ fn handle_get_status(state: &McpState) -> std::result::Result<serde_json::Value,
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn handle_search_checkpoints(
+async fn handle_search_checkpoints(
     state: &McpState,
     args: &serde_json::Value,
 ) -> std::result::Result<serde_json::Value, String> {
@@ -758,13 +740,8 @@ fn handle_search_checkpoints(
     let embeddings = embeddings.clone();
     let query_text = query.to_string();
 
-    let embedding = if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle
-            .block_on(async { embeddings.embed_one(query_text).await })
-            .map_err(|e| format!("Failed to generate query embedding: {e}"))?
-    } else {
-        return Err("No tokio runtime available for embedding generation".to_string());
-    };
+    let embedding = embeddings.embed_one(query_text).await
+        .map_err(|e| format!("Failed to generate query embedding: {e}"))?;
 
     // Search checkpoints using vector similarity
     let checkpoint_results = state

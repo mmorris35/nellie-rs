@@ -83,7 +83,7 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [x] 0.1.1: Initialize Rust project with Cargo
 - [x] 0.1.2: Configure development tools (clippy, fmt, deny)
 - [ ] 0.1.3: Set up CI/CD with GitHub Actions
-- [ ] 0.2.1: Create project module structure
+- [x] 0.2.1: Create project module structure
 - [ ] 0.2.2: Define error types and Result aliases
 - [ ] 0.2.3: Create configuration system
 
@@ -132,7 +132,7 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [ ] 5.2.3: Create operator guide
 
 **Current Phase**: 0
-**Next Subtask**: 0.1.3
+**Next Subtask**: 0.2.2
 
 ---
 

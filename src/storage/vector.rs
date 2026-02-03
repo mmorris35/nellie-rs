@@ -16,22 +16,27 @@ pub const EMBEDDING_DIM: usize = 384;
 ///
 /// # Errors
 ///
-/// Returns an error if the extension cannot be loaded.
+/// Returns an error if the extension cannot be loaded or verified.
 pub fn load_extension(conn: &Connection) -> Result<()> {
     // sqlite-vec should be statically linked when using the bundled feature
     // We attempt to use it by executing a simple vec0 query
-    // If it fails, the extension is not available
-    let result = conn.execute_batch("SELECT vec_version();");
-
-    if let Err(e) = result {
-        tracing::warn!("sqlite-vec extension not available: {}", e);
-        // Don't fail here - just log and continue
-        // The extension may not be needed for all use cases
-    } else {
-        tracing::debug!("sqlite-vec extension loaded");
+    // If it fails, the extension is not available and we fail loudly
+    match conn.execute_batch("SELECT vec_version();") {
+        Ok(()) => {
+            tracing::info!("sqlite-vec extension loaded and verified");
+            Ok(())
+        }
+        Err(e) => {
+            let err_msg = format!(
+                "sqlite-vec extension failed to load. \
+                 Vector search will not work. \
+                 This is a CRITICAL error - embeddings cannot be stored. \
+                 Error: {e}"
+            );
+            tracing::error!("{err_msg}");
+            Err(crate::error::StorageError::Vector(err_msg).into())
+        }
     }
-
-    Ok(())
 }
 
 /// Create a vec0 virtual table for vector similarity search.

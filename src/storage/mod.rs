@@ -64,13 +64,11 @@ pub use vector::{
 ///
 /// # Errors
 ///
-/// Returns an error if database initialization fails.
+/// Returns an error if database initialization fails or sqlite-vec extension cannot be loaded.
 pub fn init_storage(db: &Database) -> crate::Result<()> {
     db.with_conn(|conn| {
-        // Load sqlite-vec extension (optional - may not be available)
-        if let Err(e) = load_extension(conn) {
-            tracing::warn!("sqlite-vec extension not available: {e}");
-        }
+        // Load sqlite-vec extension - REQUIRED for vector search
+        load_extension(conn)?;
 
         // Run migrations
         migrate(conn)?;

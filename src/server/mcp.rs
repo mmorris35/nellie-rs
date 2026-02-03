@@ -353,26 +353,29 @@ fn handle_search_code(
     let limit = args["limit"].as_u64().unwrap_or(10) as usize;
     let language_filter = args["language"].as_str();
 
-    // Generate embedding for query
-    let embedding = if let Some(ref embeddings) = state.embeddings {
-        // Use real embeddings if available
-        // Since we're in a sync context, we use blocking runtime
-        // This is acceptable for the search operation
-        let embeddings = embeddings.clone();
-        let query_text = query.to_string();
+    // CRITICAL: Embedding service MUST be initialized for semantic search
+    let embeddings = state.embeddings.as_ref().ok_or_else(|| {
+        "Embedding service not initialized. Semantic search requires real embeddings.".to_string()
+    })?;
 
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle
-                .block_on(async { embeddings.embed_one(query_text).await })
-                .map_err(|e| format!("Failed to generate embedding: {e}"))?
-        } else {
-            // No async runtime available, use placeholder
-            tracing::warn!("No async runtime for embeddings, using placeholder");
-            crate::embeddings::placeholder_embedding(query)
-        }
+    if !embeddings.is_initialized() {
+        return Err(
+            "Embedding service not fully initialized. Please wait for model loading to complete."
+                .to_string(),
+        );
+    }
+
+    // Generate embedding for query using real embeddings
+    // We're in a sync context (Axum handler), so we use blocking runtime
+    let embeddings = embeddings.clone();
+    let query_text = query.to_string();
+
+    let embedding = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle
+            .block_on(async { embeddings.embed_one(query_text).await })
+            .map_err(|e| format!("Failed to generate query embedding: {e}"))?
     } else {
-        // Use placeholder embedding
-        crate::embeddings::placeholder_embedding(query)
+        return Err("No tokio runtime available for embedding generation".to_string());
     };
 
     // Create search options
@@ -381,11 +384,11 @@ fn handle_search_code(
         search_opts = search_opts.with_language(lang);
     }
 
-    // Search the database
+    // Search the database using real vector similarity
     let results = state
         .db
         .with_conn(|conn| crate::storage::search_chunks(conn, &embedding, &search_opts))
-        .map_err(|e| format!("Search failed: {e}"))?;
+        .map_err(|e| format!("Vector search failed: {e}"))?;
 
     // Format results for MCP response
     let formatted_results: Vec<serde_json::Value> = results
@@ -412,7 +415,7 @@ fn handle_search_code(
     }))
 }
 
-#[allow(clippy::redundant_closure, clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation)]
 fn handle_search_lessons(
     state: &McpState,
     args: &serde_json::Value,
@@ -420,9 +423,34 @@ fn handle_search_lessons(
     let query = args["query"].as_str().ok_or("query is required")?;
     let limit = args["limit"].as_u64().unwrap_or(5) as usize;
 
+    // CRITICAL: Embedding service MUST be initialized for semantic search
+    let embeddings = state.embeddings.as_ref().ok_or_else(|| {
+        "Embedding service not initialized. Semantic search requires real embeddings.".to_string()
+    })?;
+
+    if !embeddings.is_initialized() {
+        return Err(
+            "Embedding service not fully initialized. Please wait for model loading to complete."
+                .to_string(),
+        );
+    }
+
+    // Generate embedding for query using real embeddings
+    let embeddings = embeddings.clone();
+    let query_text = query.to_string();
+
+    let embedding = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle
+            .block_on(async { embeddings.embed_one(query_text).await })
+            .map_err(|e| format!("Failed to generate query embedding: {e}"))?
+    } else {
+        return Err("No tokio runtime available for embedding generation".to_string());
+    };
+
+    // Search lessons using vector similarity
     let lessons = state
         .db
-        .with_conn(|conn| crate::storage::search_lessons_by_text(conn, query, limit))
+        .with_conn(|conn| crate::storage::search_lessons_by_embedding(conn, &embedding, limit))
         .map_err(|e| e.to_string())?;
 
     Ok(serde_json::to_value(&lessons).unwrap_or_default())
@@ -458,7 +486,7 @@ fn handle_list_lessons(
     }))
 }
 
-#[allow(clippy::redundant_closure)]
+#[allow(clippy::cast_possible_truncation)]
 fn handle_add_lesson(
     state: &McpState,
     args: &serde_json::Value,
@@ -475,10 +503,30 @@ fn handle_add_lesson(
     let lesson = crate::storage::LessonRecord::new(title, content, tags).with_severity(severity);
     let id = lesson.id.clone();
 
+    // Store lesson in database
     state
         .db
         .with_conn(|conn| crate::storage::insert_lesson(conn, &lesson))
         .map_err(|e| e.to_string())?;
+
+    // Generate and store embedding for semantic search
+    if let Some(ref embeddings) = state.embeddings {
+        if embeddings.is_initialized() {
+            // Combine title and content for better semantic understanding
+            let text_to_embed = format!("{}\n{}", lesson.title, lesson.content);
+
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                if let Ok(embedding) =
+                    handle.block_on(async { embeddings.embed_one(text_to_embed).await })
+                {
+                    // Store embedding in vector table (ignore errors, embedding is optional for backward compat)
+                    let _ = state.db.with_conn(|conn| {
+                        crate::storage::store_lesson_embedding(conn, &lesson.id, &embedding)
+                    });
+                }
+            }
+        }
+    }
 
     Ok(serde_json::json!({
         "id": id,
@@ -504,7 +552,7 @@ fn handle_delete_lesson(
     }))
 }
 
-#[allow(clippy::redundant_closure)]
+#[allow(clippy::cast_possible_truncation)]
 fn handle_add_checkpoint(
     state: &McpState,
     args: &serde_json::Value,
@@ -518,10 +566,30 @@ fn handle_add_checkpoint(
     let checkpoint = crate::storage::CheckpointRecord::new(agent, working_on, checkpoint_state);
     let id = checkpoint.id.clone();
 
+    // Store checkpoint in database
     state
         .db
         .with_conn(|conn| crate::storage::insert_checkpoint(conn, &checkpoint))
         .map_err(|e| e.to_string())?;
+
+    // Generate and store embedding for semantic search
+    if let Some(ref embeddings) = state.embeddings {
+        if embeddings.is_initialized() {
+            // Embed the working_on description for checkpoint semantic search
+            let text_to_embed = checkpoint.working_on.clone();
+
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                if let Ok(embedding) =
+                    handle.block_on(async { embeddings.embed_one(text_to_embed).await })
+                {
+                    // Store embedding in vector table (ignore errors, embedding is optional for backward compat)
+                    let _ = state.db.with_conn(|conn| {
+                        crate::storage::store_checkpoint_embedding(conn, &checkpoint.id, &embedding)
+                    });
+                }
+            }
+        }
+    }
 
     Ok(serde_json::json!({
         "id": id,
@@ -622,7 +690,7 @@ fn handle_get_status(state: &McpState) -> std::result::Result<serde_json::Value,
     }))
 }
 
-#[allow(clippy::redundant_closure, clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation)]
 fn handle_search_checkpoints(
     state: &McpState,
     args: &serde_json::Value,
@@ -631,18 +699,45 @@ fn handle_search_checkpoints(
     let agent_filter = args["agent"].as_str();
     let limit = args["limit"].as_u64().unwrap_or(5) as usize;
 
-    let checkpoints = if let Some(agent) = agent_filter {
-        // Search only for specific agent
-        state
-            .db
-            .with_conn(|conn| crate::storage::search_checkpoints_by_agent(conn, agent, limit))
-            .map_err(|e| e.to_string())?
+    // CRITICAL: Embedding service MUST be initialized for semantic search
+    let embeddings = state.embeddings.as_ref().ok_or_else(|| {
+        "Embedding service not initialized. Semantic search requires real embeddings.".to_string()
+    })?;
+
+    if !embeddings.is_initialized() {
+        return Err(
+            "Embedding service not fully initialized. Please wait for model loading to complete."
+                .to_string(),
+        );
+    }
+
+    // Generate embedding for query using real embeddings
+    let embeddings = embeddings.clone();
+    let query_text = query.to_string();
+
+    let embedding = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle
+            .block_on(async { embeddings.embed_one(query_text).await })
+            .map_err(|e| format!("Failed to generate query embedding: {e}"))?
     } else {
-        // Search all checkpoints by text query
-        state
-            .db
-            .with_conn(|conn| crate::storage::search_checkpoints_by_text(conn, query, limit))
-            .map_err(|e| e.to_string())?
+        return Err("No tokio runtime available for embedding generation".to_string());
+    };
+
+    // Search checkpoints using vector similarity
+    let checkpoint_results = state
+        .db
+        .with_conn(|conn| crate::storage::search_checkpoints_by_embedding(conn, &embedding, limit))
+        .map_err(|e| e.to_string())?;
+
+    // Filter by agent if specified
+    let checkpoints: Vec<_> = if let Some(agent) = agent_filter {
+        checkpoint_results
+            .into_iter()
+            .filter(|cp| cp.record.agent == agent)
+            .map(|cp| cp.record)
+            .collect()
+    } else {
+        checkpoint_results.into_iter().map(|cp| cp.record).collect()
     };
 
     Ok(serde_json::json!({
@@ -738,7 +833,7 @@ mod tests {
     }
 
     #[test]
-    fn test_search_code_with_placeholder_embedding() {
+    fn test_search_code_requires_embedding_service() {
         let db = crate::storage::Database::open_in_memory()
             .expect("Failed to create in-memory database");
         db.with_conn(|conn| -> crate::Result<()> {
@@ -747,27 +842,18 @@ mod tests {
             Ok(())
         })
         .expect("Failed to setup database");
-        let state = McpState::new(db);
+        let state = McpState::new(db); // No embedding service
 
-        // Test with placeholder embedding (should gracefully handle missing vector table)
+        // Test that search fails without embedding service
         let args = serde_json::json!({
             "query": "test search query"
         });
 
         let result = handle_search_code(&state, &args);
-        // May fail due to missing vector table in test environment,
-        // but should handle the error gracefully
-        match result {
-            Ok(response) => {
-                // If successful, verify response structure
-                assert!(response.get("results").is_some());
-                assert_eq!(response["query"], "test search query");
-            }
-            Err(e) => {
-                // Expected in test environment without sqlite-vec
-                assert!(e.contains("Search failed") || e.contains("chunk_embeddings"));
-            }
-        }
+        // Now requires embedding service - should fail with appropriate error
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.contains("Embedding service not initialized"));
     }
 
     #[test]
@@ -920,7 +1006,7 @@ mod tests {
     }
 
     #[test]
-    fn test_search_lessons_success() {
+    fn test_search_lessons_requires_embedding_service() {
         let db = crate::storage::Database::open_in_memory()
             .expect("Failed to create in-memory database");
         db.with_conn(|conn| -> crate::Result<()> {
@@ -936,7 +1022,7 @@ mod tests {
             Ok(())
         })
         .expect("Failed to setup");
-        let state = McpState::new(db);
+        let state = McpState::new(db); // No embedding service
 
         let args = serde_json::json!({
             "query": "error handling",
@@ -944,11 +1030,10 @@ mod tests {
         });
 
         let result = handle_search_lessons(&state, &args);
-        assert!(result.is_ok());
-
-        let response = result.unwrap();
-        // Response should be an array or object with lessons
-        assert!(response.is_array() || response.is_object());
+        // Semantic search requires embedding service - should fail with appropriate error
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.contains("Embedding service not initialized"));
     }
 
     #[test]
@@ -969,12 +1054,12 @@ mod tests {
     }
 
     #[test]
-    fn test_search_lessons_default_limit() {
+    fn test_search_lessons_default_limit_requires_embedding() {
         let db = crate::storage::Database::open_in_memory()
             .expect("Failed to create in-memory database");
         db.with_conn(|conn| crate::storage::migrate(conn))
             .expect("Failed to migrate");
-        let state = McpState::new(db);
+        let state = McpState::new(db); // No embedding service
 
         let args = serde_json::json!({
             "query": "some query"
@@ -982,12 +1067,12 @@ mod tests {
         });
 
         let result = handle_search_lessons(&state, &args);
-        // Should succeed (may return empty results)
-        assert!(result.is_ok());
+        // Semantic search requires embedding service
+        assert!(result.is_err());
     }
 
     #[test]
-    fn test_search_lessons_with_limit() {
+    fn test_search_lessons_with_limit_requires_embedding() {
         let db = crate::storage::Database::open_in_memory()
             .expect("Failed to create in-memory database");
         db.with_conn(|conn| -> crate::Result<()> {
@@ -1005,7 +1090,7 @@ mod tests {
             Ok(())
         })
         .expect("Failed to setup");
-        let state = McpState::new(db);
+        let state = McpState::new(db); // No embedding service
 
         let args = serde_json::json!({
             "query": "lesson",
@@ -1013,16 +1098,17 @@ mod tests {
         });
 
         let result = handle_search_lessons(&state, &args);
-        assert!(result.is_ok());
+        // Semantic search requires embedding service
+        assert!(result.is_err());
     }
 
     #[test]
-    fn test_search_lessons_empty_result() {
+    fn test_search_lessons_empty_result_requires_embedding() {
         let db = crate::storage::Database::open_in_memory()
             .expect("Failed to create in-memory database");
         db.with_conn(|conn| crate::storage::migrate(conn))
             .expect("Failed to migrate");
-        let state = McpState::new(db);
+        let state = McpState::new(db); // No embedding service
 
         let args = serde_json::json!({
             "query": "nonexistent lesson query",
@@ -1030,8 +1116,8 @@ mod tests {
         });
 
         let result = handle_search_lessons(&state, &args);
-        // Should return success with empty results
-        assert!(result.is_ok());
+        // Semantic search requires embedding service
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1579,7 +1665,7 @@ mod tests {
     }
 
     #[test]
-    fn test_search_checkpoints_success() {
+    fn test_search_checkpoints_success_requires_embedding() {
         let db = crate::storage::Database::open_in_memory()
             .expect("Failed to create in-memory database");
         db.with_conn(|conn| -> crate::Result<()> {
@@ -1603,7 +1689,7 @@ mod tests {
             Ok(())
         })
         .expect("Failed to setup");
-        let state = McpState::new(db);
+        let state = McpState::new(db); // No embedding service
 
         let args = serde_json::json!({
             "query": "feature",
@@ -1611,16 +1697,14 @@ mod tests {
         });
 
         let result = handle_search_checkpoints(&state, &args);
-        assert!(result.is_ok());
-
-        let response = result.unwrap();
-        assert!(response.get("checkpoints").is_some());
-        assert!(response.get("count").is_some());
-        assert_eq!(response["query"], "feature");
+        // Semantic search requires embedding service
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.contains("Embedding service not initialized"));
     }
 
     #[test]
-    fn test_search_checkpoints_with_agent_filter() {
+    fn test_search_checkpoints_with_agent_filter_requires_embedding() {
         let db = crate::storage::Database::open_in_memory()
             .expect("Failed to create in-memory database");
         db.with_conn(|conn| -> crate::Result<()> {
@@ -1642,7 +1726,7 @@ mod tests {
             Ok(())
         })
         .expect("Failed to setup");
-        let state = McpState::new(db);
+        let state = McpState::new(db); // No embedding service
 
         let args = serde_json::json!({
             "query": "ignored",
@@ -1651,10 +1735,8 @@ mod tests {
         });
 
         let result = handle_search_checkpoints(&state, &args);
-        assert!(result.is_ok());
-
-        let response = result.unwrap();
-        assert_eq!(response["agent"], "agent-1");
+        // Semantic search requires embedding service
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1675,22 +1757,20 @@ mod tests {
     }
 
     #[test]
-    fn test_search_checkpoints_default_limit() {
+    fn test_search_checkpoints_default_limit_requires_embedding() {
         let db = crate::storage::Database::open_in_memory()
             .expect("Failed to create in-memory database");
         db.with_conn(|conn| crate::storage::migrate(conn))
             .expect("Failed to migrate");
-        let state = McpState::new(db);
+        let state = McpState::new(db); // No embedding service
 
         let args = serde_json::json!({
             "query": "test"
         });
 
         let result = handle_search_checkpoints(&state, &args);
-        assert!(result.is_ok());
-
-        let response = result.unwrap();
-        assert_eq!(response["limit"], 5);
+        // Semantic search requires embedding service
+        assert!(result.is_err());
     }
 
     #[test]

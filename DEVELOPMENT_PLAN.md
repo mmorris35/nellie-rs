@@ -88,9 +88,9 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [ ] 0.2.3: Create configuration system
 
 ### Phase 1: Core Storage & Embeddings (2 weeks)
-- [ ] 1.1.1: Set up SQLite with rusqlite
-- [ ] 1.1.2: Integrate sqlite-vec extension
-- [ ] 1.1.3: Implement schema migrations
+- [x] 1.1.1: Set up SQLite with rusqlite
+- [x] 1.1.2: Integrate sqlite-vec extension
+- [x] 1.1.3: Implement schema migrations
 - [ ] 1.2.1: Define storage traits and models
 - [ ] 1.2.2: Implement chunk storage operations
 - [ ] 1.2.3: Implement vector search
@@ -131,8 +131,8 @@ The executor agent already knows to read CLAUDE.md and the phase plan files. Jus
 - [ ] 5.2.2: Generate API documentation
 - [ ] 5.2.3: Create operator guide
 
-**Current Phase**: 0
-**Next Subtask**: 0.2.2
+**Current Phase**: 1 (Core Storage & Embeddings)
+**Next Subtask**: 1.2.1
 
 ---
 

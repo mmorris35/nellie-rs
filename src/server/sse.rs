@@ -21,7 +21,7 @@ use std::{
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
-use super::mcp::{get_tools, McpState, ToolRequest, ToolResponse};
+use super::mcp::{get_tools, McpState, ToolRequest};
 
 type SessionId = String;
 type Sessions = Arc<RwLock<HashMap<SessionId, mpsc::Sender<SseMessage>>>>;
@@ -37,7 +37,7 @@ struct JsonRpcRequest {
 }
 
 /// MCP JSON-RPC response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct JsonRpcResponse {
     jsonrpc: String,
     id: Option<serde_json::Value>,
@@ -47,7 +47,7 @@ struct JsonRpcResponse {
     error: Option<JsonRpcError>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct JsonRpcError {
     code: i32,
     message: String,

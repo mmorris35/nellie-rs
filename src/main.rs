@@ -247,8 +247,10 @@ async fn serve_command(args: ServeCommandArgs) -> Result<()> {
         );
     }
 
-    if !args.watch.is_empty() {
-        tracing::info!("Watching directories: {:?}", args.watch);
+    if args.watch.is_empty() {
+        tracing::warn!("No watch directories specified - code will not be indexed automatically");
+    } else {
+        tracing::info!("Will watch directories: {:?}", args.watch);
     }
 
     // Initialize database
@@ -267,9 +269,15 @@ async fn serve_command(args: ServeCommandArgs) -> Result<()> {
         data_dir: config.data_dir,
         embedding_threads: args.embedding_threads,
         enable_embeddings: !args.disable_embeddings,
+        watch_dirs: args.watch,
     };
 
-    let app = App::new(server_config, db).await?;
+    let app = App::new(server_config.clone(), db).await?;
+
+    // Start watcher if directories specified
+    let _watcher_handles = app.start_watcher(server_config.watch_dirs.clone()).await?;
+
+    // Run server (blocks until shutdown)
     app.run().await
 }
 

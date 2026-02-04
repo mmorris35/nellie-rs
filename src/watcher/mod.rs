@@ -14,7 +14,8 @@ mod indexer;
 mod watcher;
 
 pub use chunker::{Chunker, ChunkerConfig, CodeChunk};
-pub use events::{EventBatch, FileEvent};
+pub use events::EventBatch;
+pub use events::FileEvent;
 pub use filter::FileFilter;
 pub use handler::{EventHandler, HandlerConfig, IndexRequest, WatcherStats, WatcherStatsSnapshot};
 pub use indexer::Indexer;

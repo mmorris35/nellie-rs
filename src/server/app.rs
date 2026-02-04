@@ -15,6 +15,7 @@ use axum::{
     Router,
 };
 use tokio::signal;
+use tokio::sync::mpsc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -23,6 +24,9 @@ use super::mcp::{create_mcp_router, McpState};
 use super::rest::create_rest_router;
 use crate::embeddings::{EmbeddingConfig, EmbeddingService};
 use crate::storage::Database;
+use crate::watcher::{
+    EventHandler, FileWatcher, HandlerConfig, Indexer, WatcherConfig, WatcherStats,
+};
 use crate::Result;
 
 /// Server configuration.
@@ -42,6 +46,8 @@ pub struct ServerConfig {
     pub embedding_threads: usize,
     /// Enable embedding service (semantic search)
     pub enable_embeddings: bool,
+    /// Directories to watch for code changes
+    pub watch_dirs: Vec<std::path::PathBuf>,
 }
 
 impl Default for ServerConfig {
@@ -54,6 +60,7 @@ impl Default for ServerConfig {
             data_dir: std::path::PathBuf::from("./data"),
             embedding_threads: 4,
             enable_embeddings: true,
+            watch_dirs: Vec::new(),
         }
     }
 }
@@ -138,6 +145,136 @@ impl App {
     /// Get the API key configuration for this app.
     fn api_key_config(&self) -> Arc<ApiKeyConfig> {
         Arc::new(ApiKeyConfig::new(self.config.api_key.clone()))
+    }
+
+    /// Start the file watcher and indexer pipeline.
+    ///
+    /// Returns handles to spawned tasks that should be kept alive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if watcher or handler creation fails.
+    pub async fn start_watcher(
+        &self,
+        watch_dirs: Vec<std::path::PathBuf>,
+    ) -> Result<Option<(tokio::task::JoinHandle<()>, tokio::task::JoinHandle<()>)>> {
+        if watch_dirs.is_empty() {
+            tracing::info!("No watch directories specified, file indexing disabled");
+            return Ok(None);
+        }
+
+        tracing::info!(?watch_dirs, "Starting file watcher");
+
+        // Create channels
+        let (index_tx, index_rx) = mpsc::channel(1000);
+        let (delete_tx, delete_rx) = mpsc::channel(100);
+
+        // Create indexer
+        let indexer = Arc::new(Indexer::new(
+            self.state.db().clone(),
+            self.state.embedding_service(),
+        ));
+
+        // Spawn indexer task
+        let indexer_clone = Arc::clone(&indexer);
+        let indexer_handle = tokio::spawn(async move {
+            indexer_clone.run(index_rx, delete_rx).await;
+        });
+
+        // Create watcher
+        let watcher_config = WatcherConfig {
+            watch_dirs: watch_dirs.clone(),
+            ..Default::default()
+        };
+        let mut watcher = FileWatcher::new(&watcher_config)?;
+
+        // Create event handler for each watch directory
+        let stats = WatcherStats::new();
+        let mut handlers = Vec::new();
+        for dir in &watch_dirs {
+            let handler_config = HandlerConfig {
+                base_path: dir.clone(),
+                ignore_patterns: vec![],
+            };
+            let handler = EventHandler::new(
+                &handler_config,
+                Arc::clone(&stats),
+                index_tx.clone(),
+                delete_tx.clone(),
+            )?;
+            handlers.push((dir.clone(), handler));
+        }
+
+        // Do initial scan
+        tracing::info!("Performing initial scan of watch directories");
+        for dir in &watch_dirs {
+            self.initial_scan(dir, &index_tx).await?;
+        }
+        tracing::info!("Initial scan complete");
+
+        // Spawn watcher task
+        let watcher_handle = tokio::spawn(async move {
+            while let Some(batch) = watcher.recv().await {
+                // Route to appropriate handler based on path
+                for (base_path, handler) in &handlers {
+                    let filtered_batch = crate::watcher::EventBatch {
+                        modified: batch
+                            .modified
+                            .iter()
+                            .filter(|p| p.starts_with(base_path))
+                            .cloned()
+                            .collect(),
+                        deleted: batch
+                            .deleted
+                            .iter()
+                            .filter(|p| p.starts_with(base_path))
+                            .cloned()
+                            .collect(),
+                    };
+                    if !filtered_batch.is_empty() {
+                        handler.process_batch(filtered_batch).await;
+                    }
+                }
+            }
+            tracing::info!("Watcher loop ended");
+        });
+
+        Ok(Some((indexer_handle, watcher_handle)))
+    }
+
+    /// Perform initial scan of a directory.
+    async fn initial_scan(
+        &self,
+        dir: &std::path::Path,
+        index_tx: &mpsc::Sender<crate::watcher::IndexRequest>,
+    ) -> Result<()> {
+        use crate::watcher::{FileFilter, IndexRequest};
+
+        let filter = FileFilter::new(dir);
+        let mut count = 0;
+
+        for entry in walkdir::WalkDir::new(dir)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+        {
+            let path = entry.path();
+            if path.is_file() && filter.should_index(path) {
+                let language = FileFilter::detect_language(path).map(String::from);
+                let request = IndexRequest {
+                    path: path.to_path_buf(),
+                    language,
+                };
+                if index_tx.send(request).await.is_err() {
+                    tracing::warn!("Index channel closed during initial scan");
+                    break;
+                }
+                count += 1;
+            }
+        }
+
+        tracing::info!(dir = %dir.display(), files = count, "Initial scan complete");
+        Ok(())
     }
 
     /// Build the router with all endpoints.
@@ -339,6 +476,7 @@ mod tests {
         assert_eq!(config.data_dir, std::path::PathBuf::from("./data"));
         assert_eq!(config.embedding_threads, 4);
         assert!(config.enable_embeddings);
+        assert!(config.watch_dirs.is_empty());
     }
 
     #[test]
@@ -351,6 +489,7 @@ mod tests {
             data_dir: std::path::PathBuf::from("/custom/data"),
             embedding_threads: 8,
             enable_embeddings: false,
+            watch_dirs: vec![std::path::PathBuf::from("/some/dir")],
         };
         assert_eq!(config.host, "0.0.0.0");
         assert_eq!(config.port, 9000);
@@ -359,6 +498,7 @@ mod tests {
         assert_eq!(config.data_dir, std::path::PathBuf::from("/custom/data"));
         assert_eq!(config.embedding_threads, 8);
         assert!(!config.enable_embeddings);
+        assert_eq!(config.watch_dirs.len(), 1);
     }
 
     #[tokio::test]

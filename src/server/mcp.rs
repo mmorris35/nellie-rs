@@ -80,6 +80,18 @@ impl McpState {
             .as_ref()
             .is_some_and(|expected| expected == provided_key)
     }
+
+    /// Get the database.
+    #[must_use]
+    pub const fn db(&self) -> &Database {
+        &self.db
+    }
+
+    /// Get the embedding service if available.
+    #[must_use]
+    pub fn embedding_service(&self) -> Option<EmbeddingService> {
+        self.embeddings.clone()
+    }
 }
 
 /// Tool information with schema.

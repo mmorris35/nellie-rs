@@ -87,6 +87,7 @@ impl McpState {
 pub struct ToolInfo {
     pub name: String,
     pub description: Option<String>,
+    #[serde(rename = "inputSchema")]
     pub input_schema: serde_json::Value,
 }
 

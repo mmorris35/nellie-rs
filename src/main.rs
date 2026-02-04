@@ -7,7 +7,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 use clap::{Parser, Subcommand};
-use nellie::server::{init_metrics, init_tracing, App, ServerConfig};
+use nellie::server::{init_metrics, init_tracing, start_mcp_server, App, McpTransportConfig, ServerConfig};
 use nellie::storage::{init_storage, Database};
 use nellie::{Config, Result};
 use std::path::PathBuf;
@@ -76,6 +76,10 @@ enum Commands {
         /// Disable embedding service (semantic search will not work)
         #[arg(long, env = "NELLIE_DISABLE_EMBEDDINGS")]
         disable_embeddings: bool,
+
+        /// Port for MCP protocol server (0 to disable)
+        #[arg(long, env = "NELLIE_MCP_PORT", default_value = "8766")]
+        mcp_port: u16,
     },
 
     /// Manually index a directory
@@ -149,6 +153,7 @@ async fn main() -> Result<()> {
             watch,
             embedding_threads,
             disable_embeddings,
+            mcp_port,
         }) => {
             serve_command(ServeCommandArgs {
                 data_dir: cli.data_dir,
@@ -159,6 +164,7 @@ async fn main() -> Result<()> {
                 log_level: cli.log_level,
                 api_key: cli.api_key,
                 disable_embeddings,
+                mcp_port,
             })
             .await
         }
@@ -185,6 +191,7 @@ async fn main() -> Result<()> {
                 log_level: cli.log_level,
                 api_key: cli.api_key,
                 disable_embeddings: false,
+                mcp_port: 8766,
             })
             .await
         }
@@ -201,6 +208,7 @@ struct ServeCommandArgs {
     log_level: String,
     api_key: Option<String>,
     disable_embeddings: bool,
+    mcp_port: u16,
 }
 
 /// Serve command: Start the Nellie server
@@ -272,7 +280,24 @@ async fn serve_command(args: ServeCommandArgs) -> Result<()> {
         watch_dirs: args.watch,
     };
 
+    // Clone db for MCP server before passing to App
+    let db_for_mcp = db.clone();
+
     let app = App::new(server_config.clone(), db).await?;
+
+    // Start MCP server if enabled (port > 0)
+    let _mcp_handle = if args.mcp_port > 0 {
+        let mcp_config = McpTransportConfig {
+            host: server_config.host.clone(),
+            port: args.mcp_port,
+        };
+        // Share the App's embedding service with MCP server
+        let embeddings = app.embeddings();
+        Some(start_mcp_server(mcp_config, db_for_mcp, embeddings).await?)
+    } else {
+        tracing::info!("MCP server disabled (port=0)");
+        None
+    };
 
     // Start watcher if directories specified
     let _watcher_handles = app.start_watcher(server_config.watch_dirs.clone()).await?;

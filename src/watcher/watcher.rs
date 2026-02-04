@@ -18,6 +18,29 @@ use crate::Result;
 /// Debounce duration for file events.
 const DEBOUNCE_DURATION: Duration = Duration::from_millis(500);
 
+/// Directories to skip when setting up watches.
+/// (Used by tests; handler's FileFilter handles event filtering)
+#[allow(dead_code)]
+const SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    ".git",
+    "target",
+    "build",
+    "dist",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".idea",
+    ".vscode",
+    "vendor",
+    ".next",
+    ".nuxt",
+    "coverage",
+    ".cache",
+    ".parcel-cache",
+    "bower_components",
+];
+
 /// File watcher configuration.
 #[derive(Debug, Clone)]
 pub struct WatcherConfig {
@@ -107,6 +130,9 @@ impl FileWatcher {
 
     /// Add a directory to watch.
     ///
+    /// Uses FSEvents recursive mode for efficiency. Events from ignored
+    /// directories (node_modules, .git, etc.) are filtered in the event handler.
+    ///
     /// # Errors
     ///
     /// Returns an error if the directory cannot be watched.
@@ -121,6 +147,8 @@ impl FileWatcher {
             .into());
         }
 
+        // Use Recursive mode - FSEvents handles this efficiently
+        // Events from ignored directories will be filtered in the event handler
         self._debouncer
             .watcher()
             .watch(&path, RecursiveMode::Recursive)
@@ -130,7 +158,10 @@ impl FileWatcher {
             })?;
 
         self.watched_dirs.lock().push(path.clone());
-        tracing::info!(path = %path.display(), "Watching directory");
+        tracing::info!(
+            path = %path.display(),
+            "Watching directory tree (recursive mode)"
+        );
 
         Ok(())
     }
@@ -174,6 +205,15 @@ impl FileWatcher {
 /// Check if a path is under any watched directory.
 fn is_under_watched(watched: &[PathBuf], path: &Path) -> bool {
     watched.iter().any(|dir| path.starts_with(dir))
+}
+
+/// Check if a directory should be skipped from watching.
+/// (Used by tests; handler's FileFilter handles event filtering)
+#[allow(dead_code)]
+fn should_skip_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| SKIP_DIRS.contains(&name))
 }
 
 #[cfg(test)]
@@ -223,5 +263,14 @@ mod tests {
 
         watcher.unwatch(tmp.path()).unwrap();
         assert!(watcher.watched_dirs().is_empty());
+    }
+
+    #[test]
+    fn test_should_skip_dir() {
+        assert!(should_skip_dir(Path::new("/project/node_modules")));
+        assert!(should_skip_dir(Path::new("/project/.git")));
+        assert!(should_skip_dir(Path::new("/project/target")));
+        assert!(!should_skip_dir(Path::new("/project/src")));
+        assert!(!should_skip_dir(Path::new("/project/lib")));
     }
 }

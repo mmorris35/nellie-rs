@@ -149,11 +149,17 @@ impl App {
 
     /// Start the file watcher and indexer pipeline.
     ///
-    /// Returns handles to spawned tasks that should be kept alive.
+    /// Spawns watcher setup and initial indexing in background tasks so the
+    /// Get a clone of the embedding service if available.
+    pub fn embeddings(&self) -> Option<EmbeddingService> {
+        self.state.embeddings.clone()
+    }
+
+    /// server can start immediately. Returns handles to spawned tasks.
     ///
     /// # Errors
     ///
-    /// Returns an error if watcher or handler creation fails.
+    /// Returns an error only for critical failures (none currently - all errors logged).
     pub async fn start_watcher(
         &self,
         watch_dirs: Vec<std::path::PathBuf>,
@@ -163,7 +169,7 @@ impl App {
             return Ok(None);
         }
 
-        tracing::info!(?watch_dirs, "Starting file watcher");
+        tracing::info!(?watch_dirs, "Starting file watcher (background)");
 
         // Create channels
         let (index_tx, index_rx) = mpsc::channel(1000);
@@ -175,47 +181,74 @@ impl App {
             self.state.embedding_service(),
         ));
 
-        // Spawn indexer task
+        // Spawn indexer task (runs immediately)
         let indexer_clone = Arc::clone(&indexer);
         let indexer_handle = tokio::spawn(async move {
             indexer_clone.run(index_rx, delete_rx).await;
         });
 
-        // Create watcher
-        let watcher_config = WatcherConfig {
-            watch_dirs: watch_dirs.clone(),
-            ..Default::default()
-        };
-        let mut watcher = FileWatcher::new(&watcher_config)?;
+        // Clone data for background task
+        let watch_dirs_for_task = watch_dirs.clone();
+        let index_tx_for_task = index_tx.clone();
 
-        // Create event handler for each watch directory
-        let stats = WatcherStats::new();
-        let mut handlers = Vec::new();
-        for dir in &watch_dirs {
-            let handler_config = HandlerConfig {
-                base_path: dir.clone(),
-                ignore_patterns: vec![],
-            };
-            let handler = EventHandler::new(
-                &handler_config,
-                Arc::clone(&stats),
-                index_tx.clone(),
-                delete_tx.clone(),
-            )?;
-            handlers.push((dir.clone(), handler));
-        }
-
-        // Do initial scan
-        tracing::info!("Performing initial scan of watch directories");
-        for dir in &watch_dirs {
-            self.initial_scan(dir, &index_tx).await?;
-        }
-        tracing::info!("Initial scan complete");
-
-        // Spawn watcher task
+        // Spawn watcher setup and initial scan in background
+        // This allows server to start immediately while indexing happens
         let watcher_handle = tokio::spawn(async move {
+            // Create watcher config
+            let watcher_config = WatcherConfig {
+                watch_dirs: watch_dirs_for_task.clone(),
+                ..Default::default()
+            };
+
+            // FileWatcher::new() uses blocking walkdir, so run in spawn_blocking
+            let watcher_result = tokio::task::spawn_blocking(move || {
+                FileWatcher::new(&watcher_config)
+            }).await;
+
+            let mut watcher = match watcher_result {
+                Ok(Ok(w)) => w,
+                Ok(Err(e)) => {
+                    tracing::error!("Failed to create file watcher: {}", e);
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!("Watcher creation task panicked: {}", e);
+                    return;
+                }
+            };
+
+            tracing::info!("File watcher initialized successfully");
+
+            // Create event handlers
+            let stats = WatcherStats::new();
+            let mut handlers = Vec::new();
+            for dir in &watch_dirs_for_task {
+                let handler_config = HandlerConfig {
+                    base_path: dir.clone(),
+                    ignore_patterns: vec![],
+                };
+                match EventHandler::new(
+                    &handler_config,
+                    Arc::clone(&stats),
+                    index_tx_for_task.clone(),
+                    delete_tx.clone(),
+                ) {
+                    Ok(handler) => handlers.push((dir.clone(), handler)),
+                    Err(e) => tracing::error!("Failed to create handler for {:?}: {}", dir, e),
+                }
+            }
+
+            // Do initial scan
+            tracing::info!("Starting initial scan of watch directories");
+            for dir in &watch_dirs_for_task {
+                if let Err(e) = Self::do_initial_scan(dir, &index_tx_for_task).await {
+                    tracing::error!("Initial scan failed for {:?}: {}", dir, e);
+                }
+            }
+            tracing::info!("Initial scan complete");
+
+            // Run watcher event loop
             while let Some(batch) = watcher.recv().await {
-                // Route to appropriate handler based on path
                 for (base_path, handler) in &handlers {
                     let filtered_batch = crate::watcher::EventBatch {
                         modified: batch
@@ -242,9 +275,8 @@ impl App {
         Ok(Some((indexer_handle, watcher_handle)))
     }
 
-    /// Perform initial scan of a directory.
-    async fn initial_scan(
-        &self,
+    /// Perform initial scan of a directory (static helper for background task).
+    async fn do_initial_scan(
         dir: &std::path::Path,
         index_tx: &mpsc::Sender<crate::watcher::IndexRequest>,
     ) -> Result<()> {
@@ -273,7 +305,7 @@ impl App {
             }
         }
 
-        tracing::info!(dir = %dir.display(), files = count, "Initial scan complete");
+        tracing::info!(dir = %dir.display(), files = count, "Directory scan complete");
         Ok(())
     }
 

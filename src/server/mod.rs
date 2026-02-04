@@ -1,7 +1,7 @@
 //! MCP and REST API servers.
 //!
 //! This module provides:
-//! - MCP server using rmcp
+//! - MCP server using rmcp with StreamableHttpService
 //! - REST API using axum
 //! - Health and metrics endpoints
 //! - API key authentication middleware
@@ -11,6 +11,7 @@
 mod app;
 mod auth;
 mod mcp;
+mod mcp_transport;
 mod metrics;
 pub mod observability;
 mod rest;
@@ -18,6 +19,7 @@ mod rest;
 pub use app::{App, ServerConfig};
 pub use auth::ApiKeyConfig;
 pub use mcp::{create_mcp_router, get_tools, McpState, ToolRequest, ToolResponse};
+pub use mcp_transport::{start_mcp_server, McpTransportConfig, NellieMcpHandler};
 pub use metrics::{init_metrics, CHUNKS_TOTAL, EMBEDDING_QUEUE_DEPTH, FILES_TOTAL, LESSONS_TOTAL};
 pub use observability::init_tracing;
 pub use rest::{create_rest_router, HealthResponse};

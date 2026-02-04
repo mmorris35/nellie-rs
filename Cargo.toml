@@ -14,6 +14,13 @@ categories = ["development-tools", "database"]
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }
 
+# Random
+rand = "0.8"
+
+# Async utilities  
+futures = "0.3"
+tokio-stream = "0.1"
+
 # MCP Protocol
 rmcp = { version = "0.1", features = ["server", "transport-sse-server"] }
 

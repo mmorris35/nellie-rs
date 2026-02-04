@@ -385,6 +385,44 @@ async fn invoke_tool(
     }
 }
 
+/// Invoke a tool directly (for SSE transport).
+pub async fn invoke_tool_direct(state: &McpState, request: ToolRequest) -> ToolResponse {
+    let tool_name = request.name.clone();
+    tracing::debug!("Invoking tool (direct): {}", tool_name);
+
+    let result = match request.name.as_str() {
+        "search_code" => handle_search_code(state, &request.arguments).await,
+        "search_lessons" => handle_search_lessons(state, &request.arguments).await,
+        "list_lessons" => handle_list_lessons(state, &request.arguments),
+        "add_lesson" => handle_add_lesson(state, &request.arguments).await,
+        "delete_lesson" => handle_delete_lesson(state, &request.arguments),
+        "add_checkpoint" => handle_add_checkpoint(state, &request.arguments).await,
+        "get_recent_checkpoints" => handle_get_checkpoints(state, &request.arguments),
+        "trigger_reindex" => handle_trigger_reindex(state, &request.arguments),
+        "get_status" => handle_get_status(state),
+        "search_checkpoints" => handle_search_checkpoints(state, &request.arguments).await,
+        "get_agent_status" => handle_get_agent_status(state, &request.arguments),
+        _ => Err(format!("Unknown tool: {}", request.name)),
+    };
+
+    match result {
+        Ok(content) => {
+            tracing::debug!("Tool invocation succeeded");
+            ToolResponse {
+                content,
+                error: None,
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Tool invocation failed");
+            ToolResponse {
+                content: serde_json::Value::Null,
+                error: Some(e),
+            }
+        }
+    }
+}
+
 // Tool handlers
 
 #[allow(clippy::cast_possible_truncation)]

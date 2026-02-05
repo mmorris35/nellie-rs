@@ -39,7 +39,7 @@ ndarray = "0.16"
 tokenizers = "0.20"
 
 # File watching
-notify = { version = "6.0", default-features = false, features = ["macos_kqueue"] }
+notify = { version = "6.0", default-features = false, features = ["macos_fsevent"] }
 notify-debouncer-mini = "0.4"
 ignore = "0.4"
 

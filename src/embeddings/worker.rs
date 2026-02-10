@@ -49,6 +49,13 @@ impl EmbeddingWorker {
         let (request_tx, request_rx): (Sender<EmbeddingRequest>, Receiver<EmbeddingRequest>) =
             bounded(100);
 
+        // Unwrap Arc<Session> to get owned Session for mutable access in run().
+        let session = Arc::try_unwrap(session).map_err(|_| {
+            EmbeddingError::WorkerPool(
+                "session has multiple owners; cannot unwrap for worker pool".to_string(),
+            )
+        })?;
+
         let request_rx = Arc::new(Mutex::new(request_rx));
         let session = Arc::new(Mutex::new(session));
         let mut workers = Vec::with_capacity(num_workers);
@@ -112,7 +119,7 @@ impl EmbeddingWorker {
 /// Worker loop that processes embedding requests.
 #[allow(clippy::needless_pass_by_value)]
 fn worker_loop(
-    session: Arc<Mutex<Arc<Session>>>,
+    session: Arc<Mutex<Session>>,
     tokenizer: Arc<Tokenizer>,
     request_rx: Arc<Mutex<Receiver<EmbeddingRequest>>>,
 ) {
@@ -134,9 +141,9 @@ fn worker_loop(
     }
 }
 
-/// Process a batch of texts and generate embeddings.
+/// Process a batch of texts and generate embeddings via ONNX inference.
 fn process_request(
-    session: &Arc<Mutex<Arc<Session>>>,
+    session: &Arc<Mutex<Session>>,
     tokenizer: &Tokenizer,
     texts: &[String],
 ) -> Result<Vec<Vec<f32>>> {
@@ -157,7 +164,7 @@ fn process_request(
         .unwrap_or(0)
         .min(MAX_SEQ_LENGTH);
 
-    // Create input tensors (using i64 which is standard for BERT-like models)
+    // Create padded input vectors (i64 is standard for BERT-like models)
     let mut input_ids_vec: Vec<i64> = vec![0; batch_size * max_len];
     let mut attention_mask_vec: Vec<i64> = vec![0; batch_size * max_len];
     let mut token_type_ids_vec: Vec<i64> = vec![0; batch_size * max_len];
@@ -175,37 +182,60 @@ fn process_request(
         }
     }
 
-    // Run inference - convert to tuple form that ort expects
+    // Build input tensors
     #[allow(clippy::cast_possible_wrap)]
     let shape = vec![batch_size as i64, max_len as i64];
 
-    let _input_ids_tensor = Value::from_array((shape.as_slice(), input_ids_vec))
+    let input_ids_tensor = Value::from_array((shape.as_slice(), input_ids_vec))
         .map_err(|e| EmbeddingError::Runtime(format!("failed to create input_ids: {e}")))?;
-    let _attention_tensor = Value::from_array((shape.as_slice(), attention_mask_vec))
+    let attention_tensor = Value::from_array((shape.as_slice(), attention_mask_vec.clone()))
         .map_err(|e| EmbeddingError::Runtime(format!("failed to create attention_mask: {e}")))?;
-    let _token_type_tensor = Value::from_array((shape.as_slice(), token_type_ids_vec))
+    let token_type_tensor = Value::from_array((shape.as_slice(), token_type_ids_vec))
         .map_err(|e| EmbeddingError::Runtime(format!("failed to create token_type_ids: {e}")))?;
 
-    // Generate embeddings
-    // Note: Currently using mock embeddings due to ort Session mutability requirements
-    // Full ONNX inference will be implemented with proper session management
-    let _session_wrapper = session.lock();
-    Ok(generate_mock_embeddings(batch_size))
-}
+    // Run ONNX inference (lock held for duration of run + tensor extraction)
+    let mut session_guard = session.lock();
 
-/// Generate mock embeddings for testing (placeholder implementation).
-/// In production, this would use actual ONNX inference.
-fn generate_mock_embeddings(batch_size: usize) -> Vec<Vec<f32>> {
+    let outputs = session_guard
+        .run(ort::inputs![
+            "input_ids" => input_ids_tensor,
+            "attention_mask" => attention_tensor,
+            "token_type_ids" => token_type_tensor,
+        ])
+        .map_err(|e| EmbeddingError::Runtime(format!("ONNX inference failed: {e}")))?;
+
+    // Extract hidden states: shape [batch_size, seq_len, hidden_size]
+    let hidden_output = &outputs[0];
+    let (out_shape, hidden_data) = hidden_output
+        .try_extract_tensor::<f32>()
+        .map_err(|e| EmbeddingError::Runtime(format!("failed to extract output tensor: {e}")))?;
+
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let hidden_size = *out_shape.last().unwrap_or(&(EMBEDDING_DIM as i64)) as usize;
+
+    // Copy data out before dropping the session lock
+    let hidden_data = hidden_data.to_vec();
+    let attention_mask_clone = attention_mask_vec;
+
+    // Drop outputs and session lock before post-processing
+    drop(outputs);
+    drop(session_guard);
+
+    // Mean pool each item in the batch
     let mut embeddings = Vec::with_capacity(batch_size);
-    for _ in 0..batch_size {
-        let emb = vec![0.0f32; EMBEDDING_DIM];
-        embeddings.push(emb);
+    for i in 0..batch_size {
+        let offset = i * max_len * hidden_size;
+        let item_hidden = &hidden_data[offset..offset + max_len * hidden_size];
+        let item_mask = &attention_mask_clone[i * max_len..(i + 1) * max_len];
+
+        let embedding = mean_pool_embedding(item_hidden, item_mask, max_len, hidden_size);
+        embeddings.push(embedding);
     }
-    embeddings
+
+    Ok(embeddings)
 }
 
-/// Apply mean pooling with attention mask.
-#[allow(dead_code)]
+/// Apply mean pooling with attention mask, then L2-normalize.
 fn mean_pool_embedding(
     hidden_states: &[f32],
     attention_mask: &[i64],

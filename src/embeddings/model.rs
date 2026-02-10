@@ -55,10 +55,21 @@ impl EmbeddingModel {
             .commit_from_file(&model_path)
             .map_err(|e| EmbeddingError::ModelLoad(format!("failed to load model: {e}")))?;
 
+        let input_names: Vec<&str> = session
+            .inputs()
+            .iter()
+            .map(ort::value::Outlet::name)
+            .collect();
+        let output_names: Vec<&str> = session
+            .outputs()
+            .iter()
+            .map(ort::value::Outlet::name)
+            .collect();
+
         tracing::info!(
             path = %model_path.display(),
-            inputs = session.inputs().len(),
-            outputs = session.outputs().len(),
+            ?input_names,
+            ?output_names,
             "Model loaded successfully"
         );
 

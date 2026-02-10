@@ -88,8 +88,11 @@ impl EmbeddingService {
 
             tracing::info!("Initializing embedding service");
 
-            // Load model
+            // Load model and extract session (drop model so Arc refcount = 1
+            // for try_unwrap in the worker pool)
             let model = EmbeddingModel::load(&self.inner.config.model_path)?;
+            let session = model.session();
+            drop(model);
 
             // Load tokenizer
             let tokenizer =
@@ -98,11 +101,8 @@ impl EmbeddingService {
                 })?;
 
             // Create worker pool
-            let worker = EmbeddingWorker::new(
-                model.session(),
-                Arc::new(tokenizer),
-                self.inner.config.num_workers,
-            )?;
+            let worker =
+                EmbeddingWorker::new(session, Arc::new(tokenizer), self.inner.config.num_workers)?;
 
             *worker_guard = Some(worker);
         }

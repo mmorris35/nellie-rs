@@ -7,7 +7,8 @@
 #![allow(clippy::module_name_repetitions)]
 
 use clap::{Parser, Subcommand};
-use nellie::server::{init_metrics, init_tracing, start_mcp_server, App, McpTransportConfig, ServerConfig};
+use nellie::server::{init_metrics, init_tracing, App, ServerConfig};
+use nellie::watcher::{FileFilter, FileWatcher, IndexRequest, Indexer, WatcherConfig};
 use nellie::storage::{init_storage, Database};
 use nellie::{Config, Result};
 use std::path::PathBuf;
@@ -76,10 +77,6 @@ enum Commands {
         /// Disable embedding service (semantic search will not work)
         #[arg(long, env = "NELLIE_DISABLE_EMBEDDINGS")]
         disable_embeddings: bool,
-
-        /// Port for MCP protocol server (0 to disable)
-        #[arg(long, env = "NELLIE_MCP_PORT", default_value = "8766")]
-        mcp_port: u16,
     },
 
     /// Manually index a directory
@@ -153,7 +150,6 @@ async fn main() -> Result<()> {
             watch,
             embedding_threads,
             disable_embeddings,
-            mcp_port,
         }) => {
             serve_command(ServeCommandArgs {
                 data_dir: cli.data_dir,
@@ -164,7 +160,6 @@ async fn main() -> Result<()> {
                 log_level: cli.log_level,
                 api_key: cli.api_key,
                 disable_embeddings,
-                mcp_port,
             })
             .await
         }
@@ -191,7 +186,6 @@ async fn main() -> Result<()> {
                 log_level: cli.log_level,
                 api_key: cli.api_key,
                 disable_embeddings: false,
-                mcp_port: 8766,
             })
             .await
         }
@@ -208,7 +202,6 @@ struct ServeCommandArgs {
     log_level: String,
     api_key: Option<String>,
     disable_embeddings: bool,
-    mcp_port: u16,
 }
 
 /// Serve command: Start the Nellie server
@@ -255,10 +248,8 @@ async fn serve_command(args: ServeCommandArgs) -> Result<()> {
         );
     }
 
-    if args.watch.is_empty() {
-        tracing::warn!("No watch directories specified - code will not be indexed automatically");
-    } else {
-        tracing::info!("Will watch directories: {:?}", args.watch);
+    if !args.watch.is_empty() {
+        tracing::info!("Watching directories: {:?}", args.watch);
     }
 
     // Initialize database
@@ -277,33 +268,240 @@ async fn serve_command(args: ServeCommandArgs) -> Result<()> {
         data_dir: config.data_dir,
         embedding_threads: args.embedding_threads,
         enable_embeddings: !args.disable_embeddings,
-        watch_dirs: args.watch,
+        watch_dirs: args.watch.clone(),
     };
 
-    // Clone db for MCP server before passing to App
-    let db_for_mcp = db.clone();
+    // Clone db for the indexer before giving it to the App
+    let indexer_db = db.clone();
 
     let app = App::new(server_config.clone(), db).await?;
 
-    // Start MCP server if enabled (port > 0)
-    let _mcp_handle = if args.mcp_port > 0 {
-        let mcp_config = McpTransportConfig {
-            host: server_config.host.clone(),
-            port: args.mcp_port,
+    // Wire up file watcher and indexer if watch dirs specified
+    if !args.watch.is_empty() {
+        let embeddings = if !args.disable_embeddings {
+            let embed_config = nellie::embeddings::EmbeddingConfig::from_data_dir(
+                &server_config.data_dir,
+                args.embedding_threads,
+            );
+            let svc = nellie::embeddings::EmbeddingService::new(embed_config);
+            match svc.init().await {
+                Ok(()) => Some(svc),
+                Err(e) => {
+                    tracing::warn!("Indexer embeddings failed to init: {e}");
+                    None
+                }
+            }
+        } else {
+            None
         };
-        // Share the App's embedding service with MCP server
-        let embeddings = app.embeddings();
-        Some(start_mcp_server(mcp_config, db_for_mcp, embeddings).await?)
-    } else {
-        tracing::info!("MCP server disabled (port=0)");
-        None
+
+        let scan_db = indexer_db.clone();
+        let indexer = std::sync::Arc::new(Indexer::new(indexer_db, embeddings));
+        let (index_tx, index_rx) = tokio::sync::mpsc::channel::<IndexRequest>(1000);
+        let (delete_tx, delete_rx) = tokio::sync::mpsc::channel(100);
+
+        // Start the indexer loop
+        let indexer_clone = std::sync::Arc::clone(&indexer);
+        tokio::spawn(async move {
+            indexer_clone.run(index_rx, delete_rx).await;
+        });
+        // Startup reconciliation: iterate file_state DB instead of walking NFS tree.
+        // For each known file, stat() it — if gone, delete from index; if changed, re-index.
+        // New files are discovered by the watcher (FSEvents).
+        let index_tx_scan = index_tx.clone();
+        let delete_tx_scan = delete_tx.clone();
+        std::thread::spawn(move || {
+            reconcile_from_db(&scan_db, &index_tx_scan, &delete_tx_scan);
+        });
+
+        // Start file watcher for ongoing changes — uses direct indexer calls
+        // to bypass the scan channel and get immediate indexing of new/changed files
+        let watcher_watch_dirs = args.watch.clone();
+        let watcher_indexer = std::sync::Arc::clone(&indexer);
+        let watcher_delete_tx = delete_tx.clone();
+        tokio::spawn(async move {
+            let watcher_config = WatcherConfig {
+                watch_dirs: watcher_watch_dirs,
+                ..Default::default()
+            };
+            match FileWatcher::new(&watcher_config) {
+                Ok(mut watcher) => {
+                    tracing::info!("File watcher started");
+                    while let Some(batch) = watcher.recv().await {
+                        let total = batch.modified.len() + batch.deleted.len();
+                        tracing::info!(events = total, "Processing file change batch");
+
+                        for path in batch.modified {
+                            if FileFilter::is_code_file(&path)
+                                && !is_default_ignored_path(&path)
+                            {
+                                let language = FileFilter::detect_language(&path).map(String::from);
+                                let request = IndexRequest { path: path.clone(), language };
+                                match watcher_indexer.index_file(&request).await {
+                                    Ok(chunks) => {
+                                        if chunks > 0 {
+                                            tracing::info!(
+                                                path = %path.display(),
+                                                chunks,
+                                                "Watcher indexed file"
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            path = %path.display(),
+                                            error = %e,
+                                            "Watcher failed to index file"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        for path in batch.deleted {
+                            let _ = watcher_delete_tx.send(path).await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to start file watcher: {e}");
+                }
+            }
+        });
+    }
+
+    app.run().await
+}
+
+/// Reconcile index state from DB on startup (no filesystem walk).
+///
+/// Instead of recursively walking NFS directories (which hangs on slow mounts),
+/// iterate the `file_state` table and check each known file's metadata.
+/// - If file is gone: delete from index
+/// - If mtime or size changed: queue for re-indexing
+/// - If unchanged: skip (fast path)
+///
+/// New files are discovered by the watcher (FSEvents), not the startup scan.
+fn reconcile_from_db(
+    db: &Database,
+    index_tx: &tokio::sync::mpsc::Sender<IndexRequest>,
+    delete_tx: &tokio::sync::mpsc::Sender<std::path::PathBuf>,
+) {
+    tracing::info!("Starting DB-first reconciliation (no filesystem walk)");
+
+    let paths = match db.with_conn(|conn| {
+        nellie::storage::list_file_paths(conn)
+    }) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to list file paths from DB");
+            return;
+        }
     };
 
-    // Start watcher if directories specified
-    let _watcher_handles = app.start_watcher(server_config.watch_dirs.clone()).await?;
+    let total = paths.len();
+    tracing::info!(tracked_files = total, "Reconciling file states");
 
-    // Run server (blocks until shutdown)
-    app.run().await
+    let mut unchanged = 0u64;
+    let mut requeued = 0u64;
+    let mut deleted = 0u64;
+    let mut errors = 0u64;
+
+    for (i, path_str) in paths.iter().enumerate() {
+        let path = std::path::PathBuf::from(path_str);
+
+        match std::fs::metadata(&path) {
+            Ok(metadata) => {
+                #[allow(clippy::cast_possible_wrap)]
+                let mtime = metadata
+                    .modified()
+                    .map(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64
+                    })
+                    .unwrap_or(0);
+                #[allow(clippy::cast_possible_wrap)]
+                let size = metadata.len() as i64;
+
+                let needs_index = db
+                    .with_conn(|conn| {
+                        nellie::storage::needs_reindex_by_metadata(conn, path_str, mtime, size)
+                    })
+                    .unwrap_or(true);
+
+                if needs_index {
+                    let language = FileFilter::detect_language(&path).map(String::from);
+                    if index_tx.blocking_send(IndexRequest { path, language }).is_err() {
+                        tracing::warn!("Index channel closed during reconciliation");
+                        return;
+                    }
+                    requeued += 1;
+                } else {
+                    unchanged += 1;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if delete_tx.blocking_send(path).is_err() {
+                    tracing::warn!("Delete channel closed during reconciliation");
+                    return;
+                }
+                deleted += 1;
+            }
+            Err(_) => {
+                errors += 1;
+            }
+        }
+
+        if (i + 1) % 10000 == 0 {
+            tracing::info!(
+                progress = i + 1,
+                total,
+                unchanged,
+                requeued,
+                deleted,
+                errors,
+                "Reconciliation progress..."
+            );
+        }
+    }
+
+    tracing::info!(
+        total,
+        unchanged,
+        requeued,
+        deleted,
+        errors,
+        "Reconciliation complete"
+    );
+}
+
+/// Check if a path should be ignored (simplified version for scan).
+fn is_default_ignored_path(path: &std::path::Path) -> bool {
+    let path_str = path.to_string_lossy();
+
+    // Dotdir heuristic
+    for component in path_str.split('/') {
+        if component.starts_with('.')
+            && component.len() > 1
+            && component != ".github"
+            && component != ".gitignore"
+        {
+            return true;
+        }
+    }
+
+    let ignored_dirs = [
+        "node_modules", "target", "build", "dist", "__pycache__",
+        "venv", "vendor", "obj", "bin", "coverage", "egg-info",
+    ];
+
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        if ignored_dirs.contains(&name) {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Index command: Manually index directories

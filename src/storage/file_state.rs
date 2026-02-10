@@ -212,3 +212,27 @@ mod tests {
         .unwrap();
     }
 }
+
+/// Check if a file needs reindexing based on mtime AND size.
+/// This is faster than hash comparison since it only needs stat() metadata,
+/// not the full file content.
+///
+/// Returns `true` if the file needs reindexing:
+/// - File is not in file_state (new file)
+/// - mtime differs from stored value
+/// - size differs from stored value
+///
+/// # Errors
+///
+/// Returns an error if the database query fails.
+pub fn needs_reindex_by_metadata(
+    conn: &Connection,
+    path: &str,
+    current_mtime: i64,
+    current_size: i64,
+) -> Result<bool> {
+    match get_file_state(conn, path)? {
+        Some(state) => Ok(state.mtime != current_mtime || state.size != current_size),
+        None => Ok(true), // New file
+    }
+}

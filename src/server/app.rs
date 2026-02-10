@@ -22,6 +22,7 @@ use tower_http::trace::TraceLayer;
 use super::auth::ApiKeyConfig;
 use super::mcp::{create_mcp_router, McpState};
 use super::rest::create_rest_router;
+use super::sse::create_sse_router;
 use crate::embeddings::{EmbeddingConfig, EmbeddingService};
 use crate::storage::Database;
 use crate::watcher::{
@@ -321,6 +322,7 @@ impl App {
         Router::new()
             .merge(create_mcp_router(Arc::clone(&self.state)))
             .merge(create_rest_router(Arc::clone(&self.state)))
+            .merge(create_sse_router(Arc::clone(&self.state)))
             .layer(middleware::from_fn(auth_middleware_wrapper(api_key_config)))
             .layer(
                 TraceLayer::new_for_http()

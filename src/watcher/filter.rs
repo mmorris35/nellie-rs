@@ -157,19 +157,32 @@ impl FileFilter {
     fn is_default_ignored(path: &Path) -> bool {
         let path_str = path.to_string_lossy();
 
-        // Common directories to ignore
+        // Dotdir heuristic: any path component starting with '.' is likely junk
+        // (e.g., .mypy_cache, .pytest_cache, .tox, .cache, .next, .nuxt, .terraform)
+        // Exception: .github (workflows, actions, etc.)
+        for component in path_str.split('/') {
+            if component.starts_with('.')
+                && component.len() > 1
+                && component != ".github"
+                && component != ".gitignore"
+            {
+                return true;
+            }
+        }
+
+        // Non-dot directories to ignore
         let ignored_dirs = [
             "/node_modules/",
-            "/.git/",
             "/target/",
             "/build/",
             "/dist/",
             "/__pycache__/",
-            "/.venv/",
             "/venv/",
-            "/.idea/",
-            "/.vscode/",
             "/vendor/",
+            "/obj/",
+            "/bin/",
+            "/coverage/",
+            "/egg-info/",
         ];
 
         for dir in ignored_dirs {
@@ -179,21 +192,23 @@ impl FileFilter {
         }
 
         // Common files to ignore
-        let ignored_files = [".DS_Store", "Thumbs.db", ".env", ".env.local"];
-
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            let ignored_files = [".DS_Store", "Thumbs.db", ".env", ".env.local"];
             if ignored_files.contains(&name) {
                 return true;
             }
 
-            // Ignore hidden files (starting with .)
-            if name.starts_with('.') && name != ".gitignore" {
+            // Ignore lock files
+            let lower = name.to_lowercase();
+            if lower.ends_with(".lock")
+                || lower.ends_with("-lock.json")
+                || lower == "package-lock.json"
+            {
                 return true;
             }
 
-            // Ignore lock files
-            if name.to_lowercase().ends_with(".lock") || name.to_lowercase().ends_with("-lock.json")
-            {
+            // Ignore minified files
+            if lower.ends_with(".min.js") || lower.ends_with(".min.css") {
                 return true;
             }
         }

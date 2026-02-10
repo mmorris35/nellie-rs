@@ -397,10 +397,80 @@ pub fn new(config: ServerConfig, db: Database) -> Self {
 - `docs/OPERATOR_GUIDE.md`
 
 **Success Criteria**:
-- [ ] Server initializes EmbeddingService on startup
-- [ ] `search_code`, `search_lessons`, `search_checkpoints` work
-- [ ] Health endpoint reports embedding status
-- [ ] Tests pass with and without embeddings enabled
+- [x] Server initializes EmbeddingService on startup
+- [x] `search_code`, `search_lessons`, `search_checkpoints` work
+- [x] Health endpoint reports embedding status
+- [x] Tests pass with and without embeddings enabled
+
+---
+
+### Issue #11: Tokio Async Runtime Panic in Embedding Handlers - COMPLETED
+
+**Status**: ✅ COMPLETED (2026-02-03)
+**Type**: Bug (CRITICAL priority)
+**GitHub**: https://github.com/mmorris35/nellie-rs/issues/11
+**Branch**: `fix/async-and-sse`
+
+**Problem**: Handlers using embeddings panic with:
+```
+Cannot start a runtime from within a runtime. This happens because a function (like `block_on`) attempted to block the current thread while the thread is being used to drive asynchronous tasks.
+```
+
+**Affected Tools**:
+- `add_lesson`
+- `add_checkpoint`
+- `search_code`
+- `search_lessons`
+- `search_checkpoints`
+
+**Root Cause**: Handlers were sync `fn` but called from async Axum context. They used `handle.block_on()` to run embedding operations, which tried to create a nested tokio runtime.
+
+**Solution**:
+1. Changed affected handlers to `async fn`
+2. Replaced `handle.block_on(async { embeddings.embed_one(...).await })` with direct `.await`
+3. Updated call sites in `invoke_tool` to add `.await`
+
+**Files Modified**:
+- `src/server/mcp.rs` - 26 insertions, 49 deletions
+
+**Success Criteria**:
+- [x] `add_lesson` works without panic
+- [x] `add_checkpoint` works without panic
+- [x] All embedding operations use proper async/await
+
+---
+
+### Issue #12: SSE Transport for MCP Clients - PENDING
+
+**Status**: ⏳ PENDING
+**Type**: Enhancement (HIGH priority)
+**GitHub**: https://github.com/mmorris35/nellie-rs/issues/12
+
+**Problem**: Claude Code and other MCP clients expect SSE (Server-Sent Events) transport at `/sse` endpoint. Currently Nellie-RS only has REST `/mcp/invoke`.
+
+**Current State**:
+- REST endpoint works: `POST /mcp/invoke`
+- No SSE endpoint exists
+- `rmcp` crate with `transport-sse-server` feature is in Cargo.toml but not wired up
+
+**Required Changes**:
+1. Add SSE endpoint at `/sse` (or `/mcp/sse`)
+2. Implement MCP protocol message framing over SSE
+3. Support bidirectional communication (SSE for server→client, POST for client→server)
+
+**Implementation Options**:
+- **Option A**: Wire up existing `rmcp` crate's SSE transport
+- **Option B**: Manual SSE implementation with `axum::response::sse`
+
+**Files to Modify**:
+- `src/server/app.rs` - Add SSE route
+- `src/server/mod.rs` - New SSE handler module
+- Potentially new file: `src/server/sse.rs`
+
+**Success Criteria**:
+- [ ] SSE endpoint at `/sse` responds to connections
+- [ ] Claude Code `/mcp` command connects successfully
+- [ ] MCP tools callable via SSE transport
 
 ---
 

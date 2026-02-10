@@ -41,6 +41,7 @@ pub use chunks::{
 };
 pub use connection::Database;
 pub use file_state::{
+    needs_reindex_by_metadata,
     count_tracked_files, delete_file_state, find_stale_entries, get_file_state, list_file_paths,
     needs_reindex, upsert_file_state,
 };

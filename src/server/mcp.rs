@@ -361,7 +361,7 @@ async fn invoke_tool(
         "delete_lesson" => handle_delete_lesson(&state, &request.arguments),
         "add_checkpoint" => handle_add_checkpoint(&state, &request.arguments).await,
         "get_recent_checkpoints" => handle_get_checkpoints(&state, &request.arguments),
-        "trigger_reindex" => handle_trigger_reindex(&state, &request.arguments),
+        "trigger_reindex" => handle_trigger_reindex(&state, &request.arguments).await,
         "get_status" => handle_get_status(&state),
         "search_checkpoints" => handle_search_checkpoints(&state, &request.arguments).await,
         "get_agent_status" => handle_get_agent_status(&state, &request.arguments),
@@ -399,7 +399,7 @@ pub async fn invoke_tool_direct(state: &McpState, request: ToolRequest) -> ToolR
         "delete_lesson" => handle_delete_lesson(state, &request.arguments),
         "add_checkpoint" => handle_add_checkpoint(state, &request.arguments).await,
         "get_recent_checkpoints" => handle_get_checkpoints(state, &request.arguments),
-        "trigger_reindex" => handle_trigger_reindex(state, &request.arguments),
+        "trigger_reindex" => handle_trigger_reindex(state, &request.arguments).await,
         "get_status" => handle_get_status(state),
         "search_checkpoints" => handle_search_checkpoints(state, &request.arguments).await,
         "get_agent_status" => handle_get_agent_status(state, &request.arguments),
@@ -677,40 +677,134 @@ fn handle_get_checkpoints(
     Ok(serde_json::to_value(&checkpoints).unwrap_or_default())
 }
 
+// Replace handle_trigger_reindex with this async version:
+
 #[allow(clippy::redundant_closure)]
-fn handle_trigger_reindex(
+async fn handle_trigger_reindex(
     state: &McpState,
     args: &serde_json::Value,
 ) -> std::result::Result<serde_json::Value, String> {
     let path = args["path"].as_str();
 
     if let Some(target_path) = path {
-        // Delete chunks for the specific path to trigger re-indexing
-        state
-            .db
-            .with_conn(|conn| crate::storage::delete_chunks_by_file(conn, target_path))
-            .map_err(|e| e.to_string())?;
+        let path_buf = std::path::PathBuf::from(target_path);
+        
+        // Check if path is a directory
+        if path_buf.is_dir() {
+            // Scan directory and index all files
+            let indexer = crate::watcher::Indexer::new(
+                state.db.clone(),
+                state.embeddings.clone(),
+            );
+            let indexer = std::sync::Arc::new(indexer);
+            
+            // Walk directory and index each file
+            let walker = ignore::WalkBuilder::new(&path_buf)
+                .hidden(true)
+                .git_ignore(true)
+                .git_global(true)
+                .git_exclude(true)
+                .ignore(true)
+                .parents(true)
+                .build();
+            
+            let mut indexed = 0u64;
+            let mut skipped = 0u64;
+            let mut errors = 0u64;
+            
+            for entry in walker {
+                match entry {
+                    Ok(entry) => {
+                        let entry_path = entry.path();
+                        
+                        // Skip directories
+                        if entry_path.is_dir() {
+                            continue;
+                        }
+                        
+                        // Check if it's a code file
+                        if !crate::watcher::FileFilter::is_code_file(entry_path) {
+                            skipped += 1;
+                            continue;
+                        }
+                        
+                        // Index the file
+                        let language = crate::watcher::FileFilter::detect_language(entry_path)
+                            .map(String::from);
+                        let request = crate::watcher::IndexRequest {
+                            path: entry_path.to_path_buf(),
+                            language,
+                        };
+                        
+                        match indexer.index_file(&request).await {
+                            Ok(chunks) => {
+                                if chunks > 0 {
+                                    indexed += 1;
+                                    tracing::debug!(
+                                        path = %entry_path.display(),
+                                        chunks,
+                                        "Indexed file"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    path = %entry_path.display(),
+                                    error = %e,
+                                    "Failed to index file"
+                                );
+                                errors += 1;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Error walking directory");
+                        errors += 1;
+                    }
+                }
+            }
+            
+            tracing::info!(
+                path = %target_path,
+                indexed,
+                skipped,
+                errors,
+                "Directory scan complete"
+            );
+            
+            Ok(serde_json::json!({
+                "status": "indexed",
+                "path": target_path,
+                "files_indexed": indexed,
+                "files_skipped": skipped,
+                "errors": errors,
+                "message": format!("Indexed {} files from directory: {}", indexed, target_path)
+            }))
+        } else {
+            // Single file - delete chunks to trigger re-indexing
+            state
+                .db
+                .with_conn(|conn| crate::storage::delete_chunks_by_file(conn, target_path))
+                .map_err(|e| e.to_string())?;
 
-        // Delete file state to mark as needing re-index
-        state
-            .db
-            .with_conn(|conn| crate::storage::delete_file_state(conn, target_path))
-            .map_err(|e| e.to_string())?;
+            // Delete file state to mark as needing re-index
+            state
+                .db
+                .with_conn(|conn| crate::storage::delete_file_state(conn, target_path))
+                .map_err(|e| e.to_string())?;
 
-        Ok(serde_json::json!({
-            "status": "reindex_scheduled",
-            "path": target_path,
-            "message": format!("Re-indexing scheduled for path: {}", target_path)
-        }))
+            Ok(serde_json::json!({
+                "status": "reindex_scheduled",
+                "path": target_path,
+                "message": format!("Re-indexing scheduled for file: {}", target_path)
+            }))
+        }
     } else {
         // Clear all file state to trigger full re-index
-        // This is done by deleting all entries from file_state table
         state
             .db
             .with_conn(|conn| {
-                // Get all file paths first
                 let paths = crate::storage::list_file_paths(conn)?;
-                // Delete file state for all paths
                 for file_path in paths {
                     crate::storage::delete_file_state(conn, &file_path)?;
                 }
@@ -1561,8 +1655,8 @@ mod tests {
         assert!(result.unwrap_err().contains("id is required"));
     }
 
-    #[test]
-    fn test_trigger_reindex_specific_path() {
+    #[tokio::test]
+    async fn test_trigger_reindex_specific_path() {
         let db = crate::storage::Database::open_in_memory()
             .expect("Failed to create in-memory database");
         db.with_conn(|conn| crate::storage::migrate(conn))
@@ -1573,7 +1667,7 @@ mod tests {
             "path": "/test/file.rs"
         });
 
-        let result = handle_trigger_reindex(&state, &args);
+        let result = handle_trigger_reindex(&state, &args).await;
         assert!(result.is_ok());
 
         let response = result.unwrap();
@@ -1585,8 +1679,8 @@ mod tests {
             .contains("Re-indexing scheduled"));
     }
 
-    #[test]
-    fn test_trigger_reindex_all_paths() {
+    #[tokio::test]
+    async fn test_trigger_reindex_all_paths() {
         let db = crate::storage::Database::open_in_memory()
             .expect("Failed to create in-memory database");
         db.with_conn(|conn| crate::storage::migrate(conn))
@@ -1595,7 +1689,7 @@ mod tests {
 
         let args = serde_json::json!({});
 
-        let result = handle_trigger_reindex(&state, &args);
+        let result = handle_trigger_reindex(&state, &args).await;
         assert!(result.is_ok());
 
         let response = result.unwrap();

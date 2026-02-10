@@ -333,7 +333,7 @@ Fixed  MCP tool to properly walk directories:
 
 **Testing:** Successfully indexed 75 files from g-hive repository that were previously unindexed.
 
-### Issue #18: Broken Semantic Search (INVESTIGATING)
+### Issue #19: Broken Semantic Search (INVESTIGATING)
 
 **Date**: 2026-02-10
 **Type**: Bug (CRITICAL)
@@ -374,7 +374,7 @@ Fixed `trigger_reindex` MCP tool to properly walk directories:
 
 **Testing:** Successfully indexed 75 files from g-hive repository that were previously unindexed.
 
-### Issue #18: Broken Semantic Search (INVESTIGATING)
+### Issue #19: Broken Semantic Search (INVESTIGATING)
 
 **Date**: 2026-02-10
 **Type**: Bug (CRITICAL)

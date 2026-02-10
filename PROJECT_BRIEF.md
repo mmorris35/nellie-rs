@@ -311,3 +311,84 @@ Claude Code cannot connect - expects SSE transport at `/sse` endpoint:
 ---
 
 *This brief is ready for DevPlan MCP to generate a DEVELOPMENT_PLAN.md*
+
+### Issue #17: Directory Walking for trigger_reindex (COMPLETED)
+
+**Date**: 2026-02-10
+**Type**: Bug (HIGH)
+**Status**: ✅ Implemented (commit 80a1850)
+
+Fixed  MCP tool to properly walk directories:
+
+**Problem:** When  was called with a directory path, it only cleared DB entries for that exact path string. Since files are stored with full paths (e.g., ), directories were never matched. New repositories could not be indexed via the API.
+
+**Root Cause:** No initial directory scan existed. The watcher only detected *changes* to already-tracked files.  just cleared DB state without discovering new files.
+
+**Solution:**
+- Added  with  function using the  crate
+- Respects  patterns automatically
+- Made  async to support file indexing
+- For directory paths: walks directory and indexes each code file directly
+- For file paths: unchanged behavior (marks for re-index)
+
+**Testing:** Successfully indexed 75 files from g-hive repository that were previously unindexed.
+
+### Issue #18: Broken Semantic Search (INVESTIGATING)
+
+**Date**: 2026-02-10
+**Type**: Bug (CRITICAL)
+**Status**: 🔍 Under investigation
+
+**Symptoms:**
+- Search returns same results regardless of query
+- All distances reported as 0.0
+- 1M+ embeddings exist in database
+- Embedding service initializes correctly
+
+**Suspected causes:**
+- sqlite-vec  operation not using query embedding correctly
+- Embeddings may have been stored as all zeros
+- Vector comparison logic issue
+
+**Impact:** Semantic search is non-functional. All queries return identical results.
+
+
+### Issue #17: Directory Walking for trigger_reindex (COMPLETED)
+
+**Date**: 2026-02-10
+**Type**: Bug (HIGH)
+**Status**: ✅ Implemented (commit 80a1850)
+
+Fixed `trigger_reindex` MCP tool to properly walk directories:
+
+**Problem:** When `trigger_reindex` was called with a directory path, it only cleared DB entries for that exact path string. Since files are stored with full paths (e.g., `/path/to/repo/src/main.rs`), directories were never matched. New repositories could not be indexed via the API.
+
+**Root Cause:** No initial directory scan existed. The watcher only detected *changes* to already-tracked files. `trigger_reindex` just cleared DB state without discovering new files.
+
+**Solution:**
+- Added `watcher/scanner.rs` with `scan_directory()` function using the `ignore` crate
+- Respects `.gitignore` patterns automatically
+- Made `handle_trigger_reindex` async to support file indexing
+- For directory paths: walks directory and indexes each code file directly
+- For file paths: unchanged behavior (marks for re-index)
+
+**Testing:** Successfully indexed 75 files from g-hive repository that were previously unindexed.
+
+### Issue #18: Broken Semantic Search (INVESTIGATING)
+
+**Date**: 2026-02-10
+**Type**: Bug (CRITICAL)
+**Status**: 🔍 Under investigation
+
+**Symptoms:**
+- Search returns same results regardless of query
+- All distances reported as 0.0
+- 1M+ embeddings exist in database
+- Embedding service initializes correctly
+
+**Suspected causes:**
+- sqlite-vec MATCH operation not using query embedding correctly
+- Embeddings may have been stored as all zeros
+- Vector comparison logic issue
+
+**Impact:** Semantic search is non-functional. All queries return identical results.

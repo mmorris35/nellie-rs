@@ -236,3 +236,51 @@ pub fn needs_reindex_by_metadata(
         None => Ok(true), // New file
     }
 }
+
+/// List tracked file paths under a given path prefix.
+///
+/// # Errors
+///
+/// Returns an error if the database query fails.
+pub fn list_file_paths_by_prefix(conn: &Connection, path_prefix: &str) -> Result<Vec<String>> {
+    let prefix = if path_prefix.ends_with('/') {
+        path_prefix.to_string()
+    } else {
+        format!("{path_prefix}/")
+    };
+    let pattern = format!("{prefix}%");
+
+    let mut stmt = conn
+        .prepare("SELECT path FROM file_state WHERE path LIKE ? ORDER BY path")
+        .map_err(|e| StorageError::Database(e.to_string()))?;
+
+    let paths = stmt
+        .query_map([&pattern], |row| row.get(0))
+        .map_err(|e| StorageError::Database(e.to_string()))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| StorageError::Database(e.to_string()))?;
+
+    Ok(paths)
+}
+
+/// Delete file state entries under a path prefix.
+///
+/// Returns the number of entries deleted.
+///
+/// # Errors
+///
+/// Returns an error if the database operation fails.
+pub fn delete_file_state_by_prefix(conn: &Connection, path_prefix: &str) -> Result<usize> {
+    let prefix = if path_prefix.ends_with('/') {
+        path_prefix.to_string()
+    } else {
+        format!("{path_prefix}/")
+    };
+    let pattern = format!("{prefix}%");
+
+    let count = conn
+        .execute("DELETE FROM file_state WHERE path LIKE ?", [&pattern])
+        .map_err(|e| StorageError::Database(e.to_string()))?;
+
+    Ok(count)
+}

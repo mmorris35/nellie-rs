@@ -262,6 +262,97 @@ pub fn count_chunks_for_file(conn: &Connection, file_path: &str) -> Result<i64> 
     .map_err(|e| StorageError::Database(format!("failed to count chunks: {e}")).into())
 }
 
+/// Delete all chunks under a path prefix (directory).
+///
+/// Returns the number of chunks deleted.
+///
+/// # Errors
+///
+/// Returns an error if the deletion fails.
+pub fn delete_chunks_by_path_prefix(conn: &Connection, path_prefix: &str) -> Result<usize> {
+    // Ensure the prefix ends with a separator for proper directory matching
+    let prefix = if path_prefix.ends_with('/') {
+        path_prefix.to_string()
+    } else {
+        format!("{path_prefix}/")
+    };
+
+    // Get chunk IDs first for vector deletion
+    let ids: Vec<i64> = {
+        let mut stmt = conn
+            .prepare("SELECT id FROM chunks WHERE file_path LIKE ?")
+            .map_err(|e| StorageError::Database(format!("failed to prepare query: {e}")))?;
+
+        let pattern = format!("{prefix}%");
+        let mapped_rows = stmt
+            .query_map([&pattern], |row| row.get(0))
+            .map_err(|e| StorageError::Database(format!("failed to query: {e}")))?;
+
+        mapped_rows.flatten().collect()
+    };
+
+    // Delete from vector table
+    for id in &ids {
+        let _ = delete_vector(conn, CHUNK_VEC_TABLE, *id);
+    }
+
+    // Delete from chunks table
+    let pattern = format!("{prefix}%");
+    let count = conn
+        .execute("DELETE FROM chunks WHERE file_path LIKE ?", [&pattern])
+        .map_err(|e| StorageError::Database(format!("failed to delete chunks: {e}")))?;
+
+    tracing::debug!(path_prefix, count, "Deleted chunks under path prefix");
+    Ok(count)
+}
+
+/// List all unique file paths under a path prefix.
+///
+/// # Errors
+///
+/// Returns an error if the query fails.
+pub fn list_files_by_path_prefix(conn: &Connection, path_prefix: &str) -> Result<Vec<String>> {
+    let prefix = if path_prefix.ends_with('/') {
+        path_prefix.to_string()
+    } else {
+        format!("{path_prefix}/")
+    };
+    let pattern = format!("{prefix}%");
+
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT file_path FROM chunks WHERE file_path LIKE ? ORDER BY file_path")
+        .map_err(|e| StorageError::Database(format!("failed to prepare query: {e}")))?;
+
+    let paths = stmt
+        .query_map([&pattern], |row| row.get(0))
+        .map_err(|e| StorageError::Database(format!("failed to query: {e}")))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| StorageError::Database(format!("failed to collect paths: {e}")))?;
+
+    Ok(paths)
+}
+
+/// Count chunks under a path prefix (directory).
+///
+/// # Errors
+///
+/// Returns an error if the query fails.
+pub fn count_chunks_by_path_prefix(conn: &Connection, path_prefix: &str) -> Result<i64> {
+    let prefix = if path_prefix.ends_with('/') {
+        path_prefix.to_string()
+    } else {
+        format!("{path_prefix}/")
+    };
+    let pattern = format!("{prefix}%");
+
+    conn.query_row(
+        "SELECT COUNT(*) FROM chunks WHERE file_path LIKE ?",
+        [&pattern],
+        |row| row.get(0),
+    )
+    .map_err(|e| StorageError::Database(format!("failed to count chunks: {e}")).into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -35,15 +35,16 @@ pub use checkpoints_search::{
     search_checkpoints_by_text, store_checkpoint_embedding,
 };
 pub use chunks::{
-    count_chunks, count_chunks_for_file, delete_chunk, delete_chunks_by_file, get_chunk,
-    get_chunks_by_file, init_chunk_vectors, insert_chunk, insert_chunks_batch,
+    count_chunks, count_chunks_by_path_prefix, count_chunks_for_file, delete_chunk,
+    delete_chunks_by_file, delete_chunks_by_path_prefix, get_chunk, get_chunks_by_file,
+    init_chunk_vectors, insert_chunk, insert_chunks_batch, list_files_by_path_prefix,
     update_chunk_embedding,
 };
 pub use connection::Database;
 pub use file_state::{
-    needs_reindex_by_metadata,
-    count_tracked_files, delete_file_state, find_stale_entries, get_file_state, list_file_paths,
-    needs_reindex, upsert_file_state,
+    count_tracked_files, delete_file_state, delete_file_state_by_prefix, find_stale_entries,
+    get_file_state, list_file_paths, list_file_paths_by_prefix, needs_reindex,
+    needs_reindex_by_metadata, upsert_file_state,
 };
 pub use lessons::{
     count_lessons, delete_lesson, get_lesson, insert_lesson, list_lessons, list_lessons_by_agent,

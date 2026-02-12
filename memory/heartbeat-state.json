@@ -1,13 +1,13 @@
 {
   "lastChecks": {
-    "nellie_indexing": 1739327700,
-    "nellie_status": 1739327700
+    "nellie_status": 1739392000,
+    "nfs_indexing": 1739392000,
+    "git_status": 1739392000
   },
-  "activeWork": {
-    "session": "ember-nexus",
-    "task": "indexing /Users/mike/github",
-    "lastChunks": 7203,
-    "lastFiles": 1762
+  "activeMonitoring": {
+    "session": "salty-forest",
+    "task": "NFS indexing /Volumes/mike-github/github",
+    "started": "2025-02-12T12:00:00-08:00"
   },
-  "notes": "Indexing local repos on mini-dev-server. Network mounts too slow - need code fix."
+  "lastCompaction": "2025-02-12T12:24:00-08:00"
 }

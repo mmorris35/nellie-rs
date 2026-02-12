@@ -994,6 +994,7 @@ fn handle_get_agent_status(
 
 /// Index a repository or directory on demand.
 /// This is the preferred way for agents to ensure Nellie has fresh context for a project.
+/// Uses spawn_blocking for directory traversal to handle slow filesystems (NFS, SMB).
 #[allow(clippy::redundant_closure)]
 async fn handle_index_repo(
     state: &McpState,
@@ -1001,6 +1002,7 @@ async fn handle_index_repo(
 ) -> std::result::Result<serde_json::Value, String> {
     let path = args["path"].as_str().ok_or("path is required")?;
     let path_buf = std::path::PathBuf::from(path);
+    let path_string = path.to_string();
 
     if !path_buf.exists() {
         return Err(format!("Path does not exist: {path}"));
@@ -1012,19 +1014,41 @@ async fn handle_index_repo(
 
     let start_time = std::time::Instant::now();
 
+    tracing::info!(path, "Starting index_repo - collecting files...");
+
+    // Collect all file paths in a blocking task (handles slow NFS/SMB)
+    let path_for_walk = path_buf.clone();
+    let file_paths: Vec<std::path::PathBuf> = tokio::task::spawn_blocking(move || {
+        let walker = ignore::WalkBuilder::new(&path_for_walk)
+            .hidden(true)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .ignore(true)
+            .parents(true)
+            .build();
+
+        let mut paths = Vec::new();
+        for entry in walker {
+            if let Ok(entry) = entry {
+                let p = entry.path();
+                // Only collect files that are code files
+                if p.is_file() && crate::watcher::FileFilter::is_code_file(p) {
+                    paths.push(p.to_path_buf());
+                }
+            }
+        }
+        paths
+    })
+    .await
+    .map_err(|e| format!("Directory walk failed: {e}"))?;
+
+    let total_files = file_paths.len();
+    tracing::info!(path = path_string, total_files, "Found files to index");
+
     // Create indexer with embeddings
     let indexer = crate::watcher::Indexer::new(state.db.clone(), state.embeddings.clone());
     let indexer = std::sync::Arc::new(indexer);
-
-    // Walk directory respecting .gitignore
-    let walker = ignore::WalkBuilder::new(&path_buf)
-        .hidden(true)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .ignore(true)
-        .parents(true)
-        .build();
 
     let mut files_indexed = 0u64;
     let mut files_skipped = 0u64;
@@ -1032,60 +1056,55 @@ async fn handle_index_repo(
     let mut chunks_created = 0u64;
     let mut errors = 0u64;
 
-    for entry in walker {
-        match entry {
-            Ok(entry) => {
-                let entry_path = entry.path();
+    // Process files in batches, yielding periodically
+    for (i, entry_path) in file_paths.into_iter().enumerate() {
+        // Log progress every 100 files
+        if i > 0 && i % 100 == 0 {
+            tracing::info!(
+                path = path_string,
+                progress = format!("{}/{}", i, total_files),
+                files_indexed,
+                chunks_created,
+                "index_repo progress"
+            );
+            // Yield to allow other tasks to run
+            tokio::task::yield_now().await;
+        }
 
-                // Skip directories
-                if entry_path.is_dir() {
-                    continue;
-                }
+        // Index the file
+        let language = crate::watcher::FileFilter::detect_language(&entry_path).map(String::from);
+        let request = crate::watcher::IndexRequest {
+            path: entry_path.clone(),
+            language,
+        };
 
-                // Check if it's a code file
-                if !crate::watcher::FileFilter::is_code_file(entry_path) {
-                    files_skipped += 1;
-                    continue;
-                }
-
-                // Index the file
-                let language =
-                    crate::watcher::FileFilter::detect_language(entry_path).map(String::from);
-                let request = crate::watcher::IndexRequest {
-                    path: entry_path.to_path_buf(),
-                    language,
-                };
-
-                match indexer.index_file(&request).await {
-                    Ok(chunks) => {
-                        if chunks > 0 {
-                            files_indexed += 1;
-                            chunks_created += chunks as u64;
-                        } else {
-                            files_unchanged += 1;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            path = %entry_path.display(),
-                            error = %e,
-                            "Failed to index file"
-                        );
-                        errors += 1;
-                    }
+        match indexer.index_file(&request).await {
+            Ok(chunks) => {
+                if chunks > 0 {
+                    files_indexed += 1;
+                    chunks_created += chunks as u64;
+                } else {
+                    files_unchanged += 1;
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, "Error walking directory");
+                tracing::warn!(
+                    path = %entry_path.display(),
+                    error = %e,
+                    "Failed to index file"
+                );
                 errors += 1;
             }
         }
     }
 
+    // Also count non-code files as skipped
+    files_skipped = total_files.saturating_sub((files_indexed + files_unchanged + errors) as usize) as u64;
+
     let elapsed = start_time.elapsed();
 
     tracing::info!(
-        path,
+        path = path_string,
         files_indexed,
         files_unchanged,
         files_skipped,
@@ -1097,7 +1116,7 @@ async fn handle_index_repo(
 
     Ok(serde_json::json!({
         "status": "completed",
-        "path": path,
+        "path": path_string,
         "files_indexed": files_indexed,
         "files_unchanged": files_unchanged,
         "files_skipped": files_skipped,
@@ -1106,7 +1125,7 @@ async fn handle_index_repo(
         "elapsed_ms": elapsed.as_millis(),
         "message": format!(
             "Indexed {} files ({} chunks) from {}, {} unchanged, {} skipped, {} errors in {:.1}s",
-            files_indexed, chunks_created, path, files_unchanged, files_skipped, errors,
+            files_indexed, chunks_created, path_string, files_unchanged, files_skipped, errors,
             elapsed.as_secs_f64()
         )
     }))
@@ -1115,6 +1134,7 @@ async fn handle_index_repo(
 /// Incremental diff-based indexing.
 /// Compares file mtimes with database and only indexes new/changed files.
 /// Also removes entries for deleted files.
+/// Uses spawn_blocking for directory traversal to handle slow filesystems (NFS, SMB).
 #[allow(clippy::redundant_closure, clippy::cast_possible_wrap)]
 async fn handle_diff_index(
     state: &McpState,
@@ -1122,6 +1142,7 @@ async fn handle_diff_index(
 ) -> std::result::Result<serde_json::Value, String> {
     let path = args["path"].as_str().ok_or("path is required")?;
     let path_buf = std::path::PathBuf::from(path);
+    let path_string = path.to_string();
 
     if !path_buf.exists() {
         return Err(format!("Path does not exist: {path}"));
@@ -1132,6 +1153,8 @@ async fn handle_diff_index(
     }
 
     let start_time = std::time::Instant::now();
+
+    tracing::info!(path, "Starting diff_index - collecting files...");
 
     // Create indexer with embeddings
     let indexer = crate::watcher::Indexer::new(state.db.clone(), state.embeddings.clone());
@@ -1145,6 +1168,47 @@ async fn handle_diff_index(
         .into_iter()
         .collect();
 
+    // Collect all file paths with metadata in a blocking task (handles slow NFS/SMB)
+    let path_for_walk = path_buf.clone();
+    let file_info: Vec<(std::path::PathBuf, i64, i64)> = tokio::task::spawn_blocking(move || {
+        let walker = ignore::WalkBuilder::new(&path_for_walk)
+            .hidden(true)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .ignore(true)
+            .parents(true)
+            .build();
+
+        let mut files = Vec::new();
+        for entry in walker {
+            if let Ok(entry) = entry {
+                let p = entry.path();
+                if p.is_file() && crate::watcher::FileFilter::is_code_file(p) {
+                    // Get metadata
+                    if let Ok(metadata) = std::fs::metadata(p) {
+                        let mtime = metadata
+                            .modified()
+                            .map(|t| {
+                                t.duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs() as i64
+                            })
+                            .unwrap_or(0);
+                        let size = metadata.len() as i64;
+                        files.push((p.to_path_buf(), mtime, size));
+                    }
+                }
+            }
+        }
+        files
+    })
+    .await
+    .map_err(|e| format!("Directory walk failed: {e}"))?;
+
+    let total_files = file_info.len();
+    tracing::info!(path = path_string, total_files, "Found files for diff check");
+
     let mut seen_files: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut files_indexed = 0u64;
     let mut files_unchanged = 0u64;
@@ -1153,101 +1217,61 @@ async fn handle_diff_index(
     let mut chunks_created = 0u64;
     let mut errors = 0u64;
 
-    // Walk directory
-    let walker = ignore::WalkBuilder::new(&path_buf)
-        .hidden(true)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .ignore(true)
-        .parents(true)
-        .build();
+    // Process files
+    for (i, (entry_path, current_mtime, current_size)) in file_info.into_iter().enumerate() {
+        // Log progress every 100 files
+        if i > 0 && i % 100 == 0 {
+            tracing::info!(
+                path = path_string,
+                progress = format!("{}/{}", i, total_files),
+                files_indexed,
+                files_unchanged,
+                "diff_index progress"
+            );
+            tokio::task::yield_now().await;
+        }
 
-    for entry in walker {
-        match entry {
-            Ok(entry) => {
-                let entry_path = entry.path();
+        let path_str = entry_path.to_string_lossy().to_string();
+        seen_files.insert(path_str.clone());
 
-                // Skip directories
-                if entry_path.is_dir() {
-                    continue;
-                }
+        // Check if file needs reindexing
+        let needs_index = state
+            .db
+            .with_conn(|conn| {
+                crate::storage::needs_reindex_by_metadata(
+                    conn,
+                    &path_str,
+                    current_mtime,
+                    current_size,
+                )
+            })
+            .unwrap_or(true);
 
-                // Check if it's a code file
-                if !crate::watcher::FileFilter::is_code_file(entry_path) {
-                    files_skipped += 1;
-                    continue;
-                }
+        if !needs_index {
+            files_unchanged += 1;
+            continue;
+        }
 
-                let path_str = entry_path.to_string_lossy().to_string();
-                seen_files.insert(path_str.clone());
+        // Index the file
+        let language = crate::watcher::FileFilter::detect_language(&entry_path).map(String::from);
+        let request = crate::watcher::IndexRequest {
+            path: entry_path.clone(),
+            language,
+        };
 
-                // Get file metadata for mtime comparison
-                let metadata = match std::fs::metadata(entry_path) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        tracing::warn!(path = %entry_path.display(), error = %e, "Failed to stat file");
-                        errors += 1;
-                        continue;
-                    }
-                };
-
-                let current_mtime = metadata
-                    .modified()
-                    .map(|t| {
-                        t.duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64
-                    })
-                    .unwrap_or(0);
-
-                let current_size = metadata.len() as i64;
-
-                // Check if file needs reindexing
-                let needs_index = state
-                    .db
-                    .with_conn(|conn| {
-                        crate::storage::needs_reindex_by_metadata(
-                            conn,
-                            &path_str,
-                            current_mtime,
-                            current_size,
-                        )
-                    })
-                    .unwrap_or(true);
-
-                if !needs_index {
-                    files_unchanged += 1;
-                    continue;
-                }
-
-                // Index the file
-                let language =
-                    crate::watcher::FileFilter::detect_language(entry_path).map(String::from);
-                let request = crate::watcher::IndexRequest {
-                    path: entry_path.to_path_buf(),
-                    language,
-                };
-
-                match indexer.index_file(&request).await {
-                    Ok(chunks) => {
-                        if chunks > 0 {
-                            files_indexed += 1;
-                            chunks_created += chunks as u64;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            path = %entry_path.display(),
-                            error = %e,
-                            "Failed to index file"
-                        );
-                        errors += 1;
-                    }
+        match indexer.index_file(&request).await {
+            Ok(chunks) => {
+                if chunks > 0 {
+                    files_indexed += 1;
+                    chunks_created += chunks as u64;
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, "Error walking directory");
+                tracing::warn!(
+                    path = %entry_path.display(),
+                    error = %e,
+                    "Failed to index file"
+                );
                 errors += 1;
             }
         }
@@ -1273,7 +1297,7 @@ async fn handle_diff_index(
     let elapsed = start_time.elapsed();
 
     tracing::info!(
-        path,
+        path = path_string,
         files_indexed,
         files_unchanged,
         files_deleted,
@@ -1286,7 +1310,7 @@ async fn handle_diff_index(
 
     Ok(serde_json::json!({
         "status": "completed",
-        "path": path,
+        "path": path_string,
         "files_indexed": files_indexed,
         "files_unchanged": files_unchanged,
         "files_deleted": files_deleted,
@@ -1296,7 +1320,7 @@ async fn handle_diff_index(
         "elapsed_ms": elapsed.as_millis(),
         "message": format!(
             "Diff indexed {}: {} updated, {} unchanged, {} deleted, {} skipped in {:.1}s",
-            path, files_indexed, files_unchanged, files_deleted, files_skipped,
+            path_string, files_indexed, files_unchanged, files_deleted, files_skipped,
             elapsed.as_secs_f64()
         )
     }))
@@ -1304,6 +1328,7 @@ async fn handle_diff_index(
 
 /// Full reindex - nuclear option.
 /// Clears all indexed data for a path and re-indexes from scratch.
+/// Uses spawn_blocking for directory traversal to handle slow filesystems (NFS, SMB).
 #[allow(clippy::redundant_closure)]
 async fn handle_full_reindex(
     state: &McpState,
@@ -1311,6 +1336,7 @@ async fn handle_full_reindex(
 ) -> std::result::Result<serde_json::Value, String> {
     let path = args["path"].as_str().ok_or("path is required")?;
     let path_buf = std::path::PathBuf::from(path);
+    let path_string = path.to_string();
 
     if !path_buf.exists() {
         return Err(format!("Path does not exist: {path}"));
@@ -1340,68 +1366,80 @@ async fn handle_full_reindex(
         "Cleared existing index data"
     );
 
+    tracing::info!(path, "Starting full_reindex - collecting files...");
+
+    // Collect all file paths in a blocking task (handles slow NFS/SMB)
+    let path_for_walk = path_buf.clone();
+    let file_paths: Vec<std::path::PathBuf> = tokio::task::spawn_blocking(move || {
+        let walker = ignore::WalkBuilder::new(&path_for_walk)
+            .hidden(true)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .ignore(true)
+            .parents(true)
+            .build();
+
+        let mut paths = Vec::new();
+        for entry in walker {
+            if let Ok(entry) = entry {
+                let p = entry.path();
+                if p.is_file() && crate::watcher::FileFilter::is_code_file(p) {
+                    paths.push(p.to_path_buf());
+                }
+            }
+        }
+        paths
+    })
+    .await
+    .map_err(|e| format!("Directory walk failed: {e}"))?;
+
+    let total_files = file_paths.len();
+    tracing::info!(path = path_string, total_files, "Found files to reindex");
+
     // Create indexer with embeddings
     let indexer = crate::watcher::Indexer::new(state.db.clone(), state.embeddings.clone());
     let indexer = std::sync::Arc::new(indexer);
-
-    // Walk directory and index everything
-    let walker = ignore::WalkBuilder::new(&path_buf)
-        .hidden(true)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .ignore(true)
-        .parents(true)
-        .build();
 
     let mut files_indexed = 0u64;
     let mut files_skipped = 0u64;
     let mut chunks_created = 0u64;
     let mut errors = 0u64;
 
-    for entry in walker {
-        match entry {
-            Ok(entry) => {
-                let entry_path = entry.path();
+    // Process files in batches
+    for (i, entry_path) in file_paths.into_iter().enumerate() {
+        // Log progress every 100 files
+        if i > 0 && i % 100 == 0 {
+            tracing::info!(
+                path = path_string,
+                progress = format!("{}/{}", i, total_files),
+                files_indexed,
+                chunks_created,
+                "full_reindex progress"
+            );
+            tokio::task::yield_now().await;
+        }
 
-                // Skip directories
-                if entry_path.is_dir() {
-                    continue;
-                }
+        // Index the file
+        let language = crate::watcher::FileFilter::detect_language(&entry_path).map(String::from);
+        let request = crate::watcher::IndexRequest {
+            path: entry_path.clone(),
+            language,
+        };
 
-                // Check if it's a code file
-                if !crate::watcher::FileFilter::is_code_file(entry_path) {
-                    files_skipped += 1;
-                    continue;
-                }
-
-                // Index the file
-                let language =
-                    crate::watcher::FileFilter::detect_language(entry_path).map(String::from);
-                let request = crate::watcher::IndexRequest {
-                    path: entry_path.to_path_buf(),
-                    language,
-                };
-
-                match indexer.index_file(&request).await {
-                    Ok(chunks) => {
-                        if chunks > 0 {
-                            files_indexed += 1;
-                            chunks_created += chunks as u64;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            path = %entry_path.display(),
-                            error = %e,
-                            "Failed to index file"
-                        );
-                        errors += 1;
-                    }
+        match indexer.index_file(&request).await {
+            Ok(chunks) => {
+                if chunks > 0 {
+                    files_indexed += 1;
+                    chunks_created += chunks as u64;
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, "Error walking directory");
+                tracing::warn!(
+                    path = %entry_path.display(),
+                    error = %e,
+                    "Failed to index file"
+                );
                 errors += 1;
             }
         }
@@ -1410,7 +1448,7 @@ async fn handle_full_reindex(
     let elapsed = start_time.elapsed();
 
     tracing::info!(
-        path,
+        path = path_string,
         chunks_deleted,
         files_indexed,
         files_skipped,
@@ -1422,7 +1460,7 @@ async fn handle_full_reindex(
 
     Ok(serde_json::json!({
         "status": "completed",
-        "path": path,
+        "path": path_string,
         "cleared": {
             "chunks": chunks_deleted,
             "files": files_cleared
@@ -1436,7 +1474,7 @@ async fn handle_full_reindex(
         "elapsed_ms": elapsed.as_millis(),
         "message": format!(
             "Full reindex of {}: cleared {} chunks, indexed {} files ({} chunks), {} skipped, {} errors in {:.1}s",
-            path, chunks_deleted, files_indexed, chunks_created, files_skipped, errors,
+            path_string, chunks_deleted, files_indexed, chunks_created, files_skipped, errors,
             elapsed.as_secs_f64()
         )
     }))

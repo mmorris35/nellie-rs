@@ -12,6 +12,145 @@ use serde::{Deserialize, Serialize};
 use crate::embeddings::EmbeddingService;
 use crate::storage::Database;
 
+/// Check if a path is on a network mount (NFS, SMB, CIFS, etc.)
+/// This is used to choose between fast walker (network) and gitignore-aware walker (local).
+fn is_network_path(path: &std::path::Path) -> bool {
+    let path_str = path.to_string_lossy();
+    
+    // macOS: /Volumes/ paths that aren't the main disk
+    if path_str.starts_with("/Volumes/") && !path_str.starts_with("/Volumes/Macintosh") {
+        return true;
+    }
+    
+    // Linux: common network mount points
+    if path_str.starts_with("/mnt/") 
+        || path_str.starts_with("/media/")
+        || path_str.starts_with("/net/")
+        || path_str.starts_with("/nfs/")
+        || path_str.starts_with("/smb/")
+        || path_str.starts_with("/cifs/")
+    {
+        return true;
+    }
+
+    // Check /proc/mounts on Linux for NFS/CIFS mounts
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(mounts) = std::fs::read_to_string("/proc/mounts") {
+            for line in mounts.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    let mount_point = parts[1];
+                    let fs_type = parts[2];
+                    if path_str.starts_with(mount_point) 
+                        && (fs_type == "nfs" || fs_type == "nfs4" || fs_type == "cifs" || fs_type == "smb")
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// Directories to always skip when walking (regardless of .gitignore)
+const SKIP_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "target",
+    "build",
+    "dist",
+    ".next",
+    ".nuxt",
+    "vendor",
+    ".cargo",
+    ".rustup",
+    "Pods",
+    ".gradle",
+    ".idea",
+    ".vs",
+    ".vscode",
+    "coverage",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".tox",
+    "eggs",
+    "*.egg-info",
+    ".sass-cache",
+    "bower_components",
+];
+
+/// Fast directory walker for network mounts.
+/// Skips gitignore parsing (expensive over network) and uses a simple skip list.
+fn fast_walk_directory(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    let mut dirs_walked = 0u64;
+
+    while let Some(dir) = stack.pop() {
+        dirs_walked += 1;
+        
+        // Log progress every 100 directories
+        if dirs_walked % 100 == 0 {
+            tracing::debug!(dirs_walked, "fast_walk progress");
+        }
+
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(path = %dir.display(), error = %e, "Failed to read directory");
+                continue;
+            }
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_name = entry.file_name();
+            let name = file_name.to_string_lossy();
+
+            // Skip hidden files/dirs
+            if name.starts_with('.') && name != "." && name != ".." {
+                continue;
+            }
+
+            // Skip known junk directories
+            if SKIP_DIRS.iter().any(|&skip| {
+                if skip.contains('*') {
+                    // Simple glob matching for *.egg-info etc
+                    let pattern = skip.trim_start_matches('*');
+                    name.ends_with(pattern)
+                } else {
+                    name == skip
+                }
+            }) {
+                continue;
+            }
+
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file() {
+                // Check if it's a code file
+                if crate::watcher::FileFilter::is_code_file(&path) {
+                    files.push(path);
+                }
+            }
+        }
+    }
+
+    tracing::info!(total_files = files.len(), dirs_walked, "fast_walk complete");
+    files
+}
+
 /// MCP server state.
 pub struct McpState {
     pub db: Database,
@@ -1014,31 +1153,38 @@ async fn handle_index_repo(
 
     let start_time = std::time::Instant::now();
 
-    tracing::info!(path, "Starting index_repo - collecting files...");
+    // Check if this is a network mount (NFS/SMB) - use fast walker if so
+    let is_network = is_network_path(&path_buf);
+    tracing::info!(path, is_network, "Starting index_repo - collecting files...");
 
     // Collect all file paths in a blocking task (handles slow NFS/SMB)
     let path_for_walk = path_buf.clone();
     let file_paths: Vec<std::path::PathBuf> = tokio::task::spawn_blocking(move || {
-        let walker = ignore::WalkBuilder::new(&path_for_walk)
-            .hidden(true)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .ignore(true)
-            .parents(true)
-            .build();
+        if is_network {
+            // Fast walker for network mounts - skip gitignore parsing
+            fast_walk_directory(&path_for_walk)
+        } else {
+            // Full walker with gitignore support for local paths
+            let walker = ignore::WalkBuilder::new(&path_for_walk)
+                .hidden(true)
+                .git_ignore(true)
+                .git_global(true)
+                .git_exclude(true)
+                .ignore(true)
+                .parents(true)
+                .build();
 
-        let mut paths = Vec::new();
-        for entry in walker {
-            if let Ok(entry) = entry {
-                let p = entry.path();
-                // Only collect files that are code files
-                if p.is_file() && crate::watcher::FileFilter::is_code_file(p) {
-                    paths.push(p.to_path_buf());
+            let mut paths = Vec::new();
+            for entry in walker {
+                if let Ok(entry) = entry {
+                    let p = entry.path();
+                    if p.is_file() && crate::watcher::FileFilter::is_code_file(p) {
+                        paths.push(p.to_path_buf());
+                    }
                 }
             }
+            paths
         }
-        paths
     })
     .await
     .map_err(|e| format!("Directory walk failed: {e}"))?;
@@ -1154,7 +1300,9 @@ async fn handle_diff_index(
 
     let start_time = std::time::Instant::now();
 
-    tracing::info!(path, "Starting diff_index - collecting files...");
+    // Check if this is a network mount
+    let is_network = is_network_path(&path_buf);
+    tracing::info!(path, is_network, "Starting diff_index - collecting files...");
 
     // Create indexer with embeddings
     let indexer = crate::watcher::Indexer::new(state.db.clone(), state.embeddings.clone());
@@ -1171,34 +1319,46 @@ async fn handle_diff_index(
     // Collect all file paths with metadata in a blocking task (handles slow NFS/SMB)
     let path_for_walk = path_buf.clone();
     let file_info: Vec<(std::path::PathBuf, i64, i64)> = tokio::task::spawn_blocking(move || {
-        let walker = ignore::WalkBuilder::new(&path_for_walk)
-            .hidden(true)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .ignore(true)
-            .parents(true)
-            .build();
+        let file_paths = if is_network {
+            // Fast walker for network mounts
+            fast_walk_directory(&path_for_walk)
+        } else {
+            // Full walker with gitignore support
+            let walker = ignore::WalkBuilder::new(&path_for_walk)
+                .hidden(true)
+                .git_ignore(true)
+                .git_global(true)
+                .git_exclude(true)
+                .ignore(true)
+                .parents(true)
+                .build();
 
-        let mut files = Vec::new();
-        for entry in walker {
-            if let Ok(entry) = entry {
-                let p = entry.path();
-                if p.is_file() && crate::watcher::FileFilter::is_code_file(p) {
-                    // Get metadata
-                    if let Ok(metadata) = std::fs::metadata(p) {
-                        let mtime = metadata
-                            .modified()
-                            .map(|t| {
-                                t.duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs() as i64
-                            })
-                            .unwrap_or(0);
-                        let size = metadata.len() as i64;
-                        files.push((p.to_path_buf(), mtime, size));
+            let mut paths = Vec::new();
+            for entry in walker {
+                if let Ok(entry) = entry {
+                    let p = entry.path();
+                    if p.is_file() && crate::watcher::FileFilter::is_code_file(p) {
+                        paths.push(p.to_path_buf());
                     }
                 }
+            }
+            paths
+        };
+
+        // Get metadata for all files
+        let mut files = Vec::new();
+        for p in file_paths {
+            if let Ok(metadata) = std::fs::metadata(&p) {
+                let mtime = metadata
+                    .modified()
+                    .map(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64
+                    })
+                    .unwrap_or(0);
+                let size = metadata.len() as i64;
+                files.push((p, mtime, size));
             }
         }
         files
@@ -1366,30 +1526,38 @@ async fn handle_full_reindex(
         "Cleared existing index data"
     );
 
-    tracing::info!(path, "Starting full_reindex - collecting files...");
+    // Check if this is a network mount
+    let is_network = is_network_path(&path_buf);
+    tracing::info!(path, is_network, "Starting full_reindex - collecting files...");
 
     // Collect all file paths in a blocking task (handles slow NFS/SMB)
     let path_for_walk = path_buf.clone();
     let file_paths: Vec<std::path::PathBuf> = tokio::task::spawn_blocking(move || {
-        let walker = ignore::WalkBuilder::new(&path_for_walk)
-            .hidden(true)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .ignore(true)
-            .parents(true)
-            .build();
+        if is_network {
+            // Fast walker for network mounts
+            fast_walk_directory(&path_for_walk)
+        } else {
+            // Full walker with gitignore support
+            let walker = ignore::WalkBuilder::new(&path_for_walk)
+                .hidden(true)
+                .git_ignore(true)
+                .git_global(true)
+                .git_exclude(true)
+                .ignore(true)
+                .parents(true)
+                .build();
 
-        let mut paths = Vec::new();
-        for entry in walker {
-            if let Ok(entry) = entry {
-                let p = entry.path();
-                if p.is_file() && crate::watcher::FileFilter::is_code_file(p) {
-                    paths.push(p.to_path_buf());
+            let mut paths = Vec::new();
+            for entry in walker {
+                if let Ok(entry) = entry {
+                    let p = entry.path();
+                    if p.is_file() && crate::watcher::FileFilter::is_code_file(p) {
+                        paths.push(p.to_path_buf());
+                    }
                 }
             }
+            paths
         }
-        paths
     })
     .await
     .map_err(|e| format!("Directory walk failed: {e}"))?;

@@ -77,13 +77,18 @@ jobs:
         with:
           path: artifacts
 
-      - name: Copy install script
-        run: cp packaging/install-universal.sh artifacts/
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          cp packaging/install-universal.sh release/
+          # Flatten artifact directories
+          for dir in artifacts/*/; do
+            cp "$dir"* release/ 2>/dev/null || true
+          done
+          ls -la release/
 
       - name: Create release
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            artifacts/**/*
-            artifacts/install-universal.sh
+          files: release/*
           generate_release_notes: true

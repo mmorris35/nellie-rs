@@ -182,6 +182,29 @@ BigDev (source) ←→ mini-dev-server ←→ workstation ←→ laptop
 
 Nellie watches local directories — Syncthing handles the sync. This avoids slow network filesystem issues (NFS/SMB).
 
+## Indexing Best Practices
+
+### Manual Indexing Tools
+
+When file watching is unreliable (network mounts, large repos), use manual indexing:
+
+| Tool | Use Case |
+|------|----------|
+| `index_repo` | Index a directory on demand — best for agent startup |
+| `diff_index` | Incremental sync comparing mtimes — fast for routine updates |
+| `full_reindex` | Nuclear option — clears and rebuilds entire index |
+
+**Tip**: Call `index_repo` when starting work on a repo to ensure Nellie has fresh context.
+
+### Network Filesystem Limitation
+
+⚠️ **macOS fsevents do not work on NFS/SMB mounts**. The file watcher will start but receive zero events.
+
+**Solutions:**
+1. **Syncthing** (recommended) — Sync to local disk, Nellie watches local copy
+2. **Polling** — Use `diff_index` via cron/heartbeat for periodic updates
+3. **Manual** — Call `index_repo` when you know files changed
+
 ## Performance
 
 - **Query latency**: <100ms for 100k+ chunks

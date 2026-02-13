@@ -15,6 +15,52 @@ After install, configure your watch directories:
 ~/.nellie-rs/nellie serve --watch /path/to/your/code
 ```
 
+## Install from Shared Server (Private Repo)
+
+For teams without GitHub access to the private repo, binaries can be shared via internal server:
+
+### Setup (Admin)
+
+1. Download release binaries from GitHub:
+   ```bash
+   gh release download v0.1.1 --repo mmorris35/nellie-rs --dir /shared/nellie
+   ```
+
+2. Share the folder containing:
+   ```
+   /shared/nellie/
+   ├── nellie-macos-aarch64    # Apple Silicon
+   ├── nellie-macos-x86_64     # Intel Mac
+   ├── nellie-linux-x86_64     # Linux
+   ├── nellie-linux-aarch64    # Linux ARM
+   └── install-local.sh        # Installer script
+   ```
+
+### Install (Coworker)
+
+```bash
+# Navigate to shared folder (or copy locally first)
+cd /path/to/shared/nellie
+
+# Run installer - auto-detects platform
+./install-local.sh
+```
+
+The installer will:
+- Detect macOS/Linux and x86_64/ARM64 automatically
+- Copy the correct binary to `~/.nellie-rs/`
+- Download the embedding model from Hugging Face
+- Set up the service (launchd on macOS, systemd on Linux)
+- Create a symlink in `~/.local/bin/`
+
+### Post-Install
+
+Configure watch directories and start:
+```bash
+# Edit config or use CLI flags
+~/.nellie-rs/nellie serve --watch ~/code,~/projects --port 8765
+```
+
 ---
 
 ## What is Nellie?

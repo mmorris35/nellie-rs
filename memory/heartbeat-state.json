@@ -1,13 +1,13 @@
 {
   "lastChecks": {
-    "nellie_status": 1739392000,
-    "nfs_indexing": 1739392000,
-    "git_status": 1739392000
+    "nellie_status": 1739456580,
+    "git_status": 1739456580,
+    "release_build": 1739456580
   },
   "activeMonitoring": {
-    "session": "salty-forest",
-    "task": "NFS indexing /Volumes/mike-github/github",
-    "started": "2025-02-12T12:00:00-08:00"
+    "task": "v0.1.1 release builds",
+    "github_run": "21992186070",
+    "started": "2026-02-12T23:00:00-08:00"
   },
-  "lastCompaction": "2025-02-12T12:24:00-08:00"
+  "lastCompaction": "2026-02-13T07:43:00-08:00"
 }

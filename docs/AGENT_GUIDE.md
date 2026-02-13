@@ -2,6 +2,21 @@
 
 Instructions for AI agents (OpenClaw, Claude, etc.) to install, configure, and use Nellie-RS.
 
+## Quick Install (One-Liner)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/mmorris35/nellie-rs/main/packaging/install-universal.sh | bash
+```
+
+This auto-detects your platform (macOS/Linux, x86_64/ARM64), downloads the binary, embedding model, and sets up the service.
+
+After install, configure your watch directories:
+```bash
+~/.nellie-rs/nellie serve --watch /path/to/your/code
+```
+
+---
+
 ## What is Nellie?
 
 Nellie is your **code memory** — a local server that:

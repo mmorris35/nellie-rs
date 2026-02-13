@@ -83,19 +83,29 @@ mcp:
 
 ### Available Tools
 
+**Memory Operations:**
+
 | Tool | Description |
 |------|-------------|
 | `search_code` | Semantic search across indexed code |
 | `search_lessons` | Find lessons by natural language |
 | `add_lesson` | Record a lesson learned |
 | `list_lessons` | List all lessons |
+| `delete_lesson` | Remove a lesson by ID |
 | `add_checkpoint` | Save agent working context |
-| `get_checkpoint` | Retrieve checkpoint by agent name |
+| `get_recent_checkpoints` | Get recent checkpoints for an agent |
 | `search_checkpoints` | Search checkpoints by content |
-| `index_repo` | Index a specific directory |
-| `diff_index` | Incremental index update |
-| `full_reindex` | Clear and rebuild index |
+
+**Status & Administration:**
+
+| Tool | Description |
+|------|-------------|
 | `get_status` | Server stats (chunks, files, lessons) |
+| `get_agent_status` | Agent-specific status (idle/in_progress, checkpoint count) |
+| `index_repo` | Index a specific directory |
+| `trigger_reindex` | Re-index a specific path |
+| `diff_index` | Incremental index comparing mtimes |
+| `full_reindex` | Clear and rebuild entire index |
 
 ## REST API
 

@@ -53,12 +53,39 @@ The installer will:
 - Set up the service (launchd on macOS, systemd on Linux)
 - Create a symlink in `~/.local/bin/`
 
-### Post-Install
+### Post-Install (IMPORTANT)
 
-Configure watch directories and start:
+**Always ensure the service is running after install:**
+
+**macOS:**
 ```bash
-# Edit config or use CLI flags
-~/.nellie-rs/nellie serve --watch ~/code,~/projects --port 8765
+# Load and start the service
+launchctl unload ~/Library/LaunchAgents/com.nellie-rs.plist 2>/dev/null
+launchctl load ~/Library/LaunchAgents/com.nellie-rs.plist
+
+# Verify it's running
+curl http://localhost:8765/health
+```
+
+**Linux:**
+```bash
+# Enable and start the service
+systemctl --user daemon-reload
+systemctl --user enable nellie
+systemctl --user restart nellie
+
+# Verify it's running
+curl http://localhost:8765/health
+```
+
+**Configure watch directories:**
+```bash
+# Edit config
+nano ~/.nellie-rs/config.toml
+
+# Add your code directories, then restart:
+# macOS: launchctl unload/load ~/Library/LaunchAgents/com.nellie-rs.plist
+# Linux: systemctl --user restart nellie
 ```
 
 ---

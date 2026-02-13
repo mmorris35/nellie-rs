@@ -142,6 +142,11 @@ EOF
 </plist>
 EOF
         info "Created launchd service"
+        
+        # Start the service
+        launchctl unload "$plist" 2>/dev/null || true
+        launchctl load "$plist"
+        info "Started Nellie service"
     fi
     
     # Create systemd service (Linux)
@@ -161,6 +166,12 @@ Restart=on-failure
 WantedBy=default.target
 EOF
         info "Created systemd user service"
+        
+        # Start the service
+        systemctl --user daemon-reload
+        systemctl --user enable nellie
+        systemctl --user restart nellie
+        info "Started Nellie service"
     fi
     
     echo ""
@@ -168,24 +179,35 @@ EOF
     echo ""
     info "Installation complete!"
     echo ""
-    echo "Next steps:"
-    echo ""
-    echo "  1. Edit your config:"
-    echo "     ${YELLOW}nano $config${NC}"
-    echo "     Add your code directories to watch_dirs"
-    echo ""
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-        echo "  2. Start Nellie:"
-        echo "     ${YELLOW}launchctl load ~/Library/LaunchAgents/com.nellie-rs.plist${NC}"
+    # Wait a moment for service to start
+    sleep 2
+    
+    # Check if it's running
+    if curl -s http://localhost:8765/health >/dev/null 2>&1; then
+        echo "  ${GREEN}✓ Nellie is running on http://localhost:8765${NC}"
         echo ""
-        echo "  3. Check it's running:"
-        echo "     ${YELLOW}curl http://localhost:8765/health${NC}"
+        echo "Next steps:"
+        echo ""
+        echo "  1. Edit your config to add watch directories:"
+        echo "     ${YELLOW}nano $config${NC}"
+        echo ""
+        echo "  2. Restart after config changes:"
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            echo "     ${YELLOW}launchctl unload ~/Library/LaunchAgents/com.nellie-rs.plist${NC}"
+            echo "     ${YELLOW}launchctl load ~/Library/LaunchAgents/com.nellie-rs.plist${NC}"
+        else
+            echo "     ${YELLOW}systemctl --user restart nellie${NC}"
+        fi
     else
-        echo "  2. Start Nellie:"
-        echo "     ${YELLOW}systemctl --user enable --now nellie${NC}"
+        warn "Service may not have started. Check logs:"
+        echo "     ${YELLOW}cat $INSTALL_DIR/logs/nellie.log${NC}"
         echo ""
-        echo "  3. Check it's running:"
-        echo "     ${YELLOW}curl http://localhost:8765/health${NC}"
+        echo "To start manually:"
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            echo "     ${YELLOW}launchctl load ~/Library/LaunchAgents/com.nellie-rs.plist${NC}"
+        else
+            echo "     ${YELLOW}systemctl --user start nellie${NC}"
+        fi
     fi
     echo ""
 }

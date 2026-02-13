@@ -184,12 +184,11 @@ setup_macos_service() {
 EOF
     
     info "Created launchd service at $plist_file"
-    echo ""
-    echo "To start Nellie automatically:"
-    echo "  launchctl load $plist_file"
-    echo ""
-    echo "To start Nellie now:"
-    echo "  launchctl start com.nellie-rs"
+    
+    # Auto-start the service
+    launchctl unload "$plist_file" 2>/dev/null || true
+    launchctl load "$plist_file"
+    info "Started Nellie service"
 }
 
 # Create systemd service for Linux
@@ -216,13 +215,12 @@ WantedBy=default.target
 EOF
     
     info "Created systemd user service at $service_file"
-    echo ""
-    echo "To start Nellie automatically:"
-    echo "  systemctl --user enable nellie"
-    echo "  systemctl --user start nellie"
-    echo ""
-    echo "To check status:"
-    echo "  systemctl --user status nellie"
+    
+    # Auto-start the service
+    systemctl --user daemon-reload
+    systemctl --user enable nellie
+    systemctl --user restart nellie
+    info "Started Nellie service"
 }
 
 # Main installation
